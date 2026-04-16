@@ -6,6 +6,8 @@ import argparse
 import json
 import random
 import sys
+import termios
+import tty
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -13,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 DEFAULT_GAP_SECONDS = 6 * 60 * 60
 ANSI_RESET = "\033[0m"
+ANSI_CLEAR_LINE = "\r\033[2K"
 NAME_COLOR_PALETTE = [
     (231, 76, 60),
     (52, 152, 219),
@@ -76,6 +79,24 @@ def build_name_colors(participants: list[str], enabled: bool) -> dict[str, str]:
         name: rgb_ansi(name, palette[index % len(palette)], enabled)
         for index, name in enumerate(participants)
     }
+
+
+def read_pager_action(prompt: str) -> str:
+    print(prompt, end="", flush=True)
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            char = sys.stdin.read(1)
+            if char in ("\r", "\n"):
+                print(ANSI_CLEAR_LINE, end="", flush=True)
+                return "next"
+            if char.lower() == "q":
+                print(ANSI_CLEAR_LINE, end="", flush=True)
+                return "quit"
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def parse_from_date(value: str, tz_name: str) -> int:
@@ -297,10 +318,9 @@ def run_pager(
             print(f"End of chat. Displayed {total} messages.")
             return
 
-        user_input = input(
-            f"[{index}/{total}] Press Enter for the next message, or type q to quit: "
-        )
-        if user_input.strip().lower() in {"q", "quit", "exit"}:
+        prompt = f"[{index}/{total}] Press Enter for the next message, or type q to quit: "
+        action = read_pager_action(prompt)
+        if action == "quit":
             print("Exiting.")
             return
 
