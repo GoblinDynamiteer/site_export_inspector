@@ -5,3 +5,4 @@ chat_history.txt
 __pycache__/
 gmail_index.sqlite
 gmail_index.sqlite-*
+.codex
