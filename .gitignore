@@ -1,2 +1,4 @@
 message_*.json
+*.mbox
+*.zip
 chat_history.txt
