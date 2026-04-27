@@ -7,3 +7,4 @@ gmail_index.sqlite
 gmail_index.sqlite-*
 .codex
 *.json
+*.htm*
