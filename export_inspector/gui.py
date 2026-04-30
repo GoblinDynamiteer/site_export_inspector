@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import show_messenger_chat
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TIMEZONE = "Europe/Stockholm"
@@ -72,6 +74,191 @@ def create_date_controls() -> tuple[QCheckBox, QDateEdit]:
     date_edit.setEnabled(False)
     checkbox.toggled.connect(date_edit.setEnabled)
     return checkbox, date_edit
+
+
+def messenger_search_blob(message: dict, timezone_name: str) -> str:
+    values: list[str] = [
+        show_messenger_chat.repair_text(message.get("sender_name", "")),
+        show_messenger_chat.repair_text(message.get("content", "")),
+        show_messenger_chat.format_swedish_datetime(message["timestamp_ms"], timezone_name),
+    ]
+    values.extend(show_messenger_chat.describe_attachment(message))
+    reactions = show_messenger_chat.describe_reactions(message)
+    if reactions:
+        values.append(reactions)
+    return "\n".join(values).lower()
+
+
+def render_message_block(message: dict, timezone_name: str) -> str:
+    return "\n".join(show_messenger_chat.render_message(message, timezone_name, {}))
+
+
+class MessengerTab(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[dict] = []
+        self.participants: list[str] = []
+        self.paths: list[Path] = []
+
+        self.path_edit = line_edit("JSON file or folder with message_*.json files")
+        self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
+        self.filter_edit = line_edit("Live filter: sender, text, attachment ref, reaction…")
+        self.filter_edit.textChanged.connect(self.refresh_messages)
+        self.from_enabled, self.from_date = create_date_controls()
+        self.from_enabled.toggled.connect(self.refresh_messages)
+        self.from_date.dateChanged.connect(self.refresh_messages)
+        self.show_latest = QCheckBox("Show latest messages")
+        self.show_latest.setChecked(True)
+        self.show_latest.toggled.connect(self.refresh_messages)
+        self.render_limit = QSpinBox()
+        self.render_limit.setRange(50, 100000)
+        self.render_limit.setValue(5000)
+        self.render_limit.valueChanged.connect(self.refresh_messages)
+        self.status_label = QLabel("No chat loaded.")
+        self.info_label = QLabel("")
+        self.info_label.setWordWrap(True)
+        self.viewer = QPlainTextEdit()
+        self.viewer.setReadOnly(True)
+        self.viewer.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self.viewer.setFont(mono)
+
+        browse_file = QPushButton("Browse File")
+        browse_dir = QPushButton("Browse Folder")
+        browse_file.clicked.connect(self.pick_file)
+        browse_dir.clicked.connect(self.pick_directory)
+        load_button = QPushButton("Load Chat")
+        load_button.clicked.connect(self.load_chat)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+
+        source_box = QGroupBox("Source")
+        source_layout = QGridLayout(source_box)
+        source_layout.addWidget(QLabel("Path"), 0, 0)
+        source_layout.addWidget(self.path_edit, 0, 1, 1, 3)
+        source_layout.addWidget(browse_file, 1, 1)
+        source_layout.addWidget(browse_dir, 1, 2)
+        source_layout.addWidget(load_button, 1, 3)
+        root.addWidget(source_box)
+
+        filter_box = QGroupBox("Filter")
+        filter_layout = QFormLayout(filter_box)
+        filter_layout.addRow("Timezone", self.timezone_edit)
+        filter_layout.addRow("Live text", self.filter_edit)
+        from_row = QHBoxLayout()
+        from_row.addWidget(self.from_enabled)
+        from_row.addWidget(self.from_date)
+        filter_layout.addRow("From date", from_row)
+        filter_layout.addRow("", self.show_latest)
+        filter_layout.addRow("Render limit", self.render_limit)
+        root.addWidget(filter_box)
+
+        summary_box = QGroupBox("Summary")
+        summary_layout = QVBoxLayout(summary_box)
+        summary_layout.addWidget(self.status_label)
+        summary_layout.addWidget(self.info_label)
+        root.addWidget(summary_box)
+
+        messages_box = QGroupBox("Messages")
+        messages_layout = QVBoxLayout(messages_box)
+        messages_layout.addWidget(self.viewer)
+        root.addWidget(messages_box, 1)
+
+    def pick_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select Messenger JSON", "", "JSON Files (*.json)")
+        if path:
+            self.path_edit.setText(path)
+
+    def pick_directory(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select Messenger Folder")
+        if path:
+            self.path_edit.setText(path)
+
+    def load_chat(self) -> None:
+        raw_path = self.path_edit.text().strip()
+        input_path: str | None = raw_path or None
+
+        try:
+            self.messages, self.participants, self.paths = show_messenger_chat.load_exports(input_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return
+
+        participants_text = " / ".join(self.participants) if self.participants else "(none)"
+        self.info_label.setText(
+            f"Files: {len(self.paths)}\nParticipants: {participants_text}\nMessages: {len(self.messages)}"
+        )
+        self.refresh_messages()
+
+    def current_from_timestamp(self) -> int | None:
+        if not self.from_enabled.isChecked():
+            return None
+        try:
+            return show_messenger_chat.parse_from_date(iso_date(self.from_date), self.timezone_edit.text().strip() or DEFAULT_TIMEZONE)
+        except Exception:
+            return None
+
+    def _message_search_blob(self, message: dict) -> str:
+        return messenger_search_blob(
+            message,
+            self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
+        )
+
+    def filtered_messages(self) -> list[dict]:
+        timezone_name = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+        from_timestamp = self.current_from_timestamp()
+        filtered = show_messenger_chat.filter_messages_from(self.messages, from_timestamp)
+        query = self.filter_edit.text().strip().lower()
+        if not query:
+            return filtered
+        terms = query.split()
+        matches: list[dict] = []
+        for message in filtered:
+            blob = self._message_search_blob(message)
+            if all(term in blob for term in terms):
+                matches.append(message)
+        return matches
+
+    def refresh_messages(self) -> None:
+        if not self.messages:
+            self.viewer.clear()
+            self.status_label.setText("No chat loaded.")
+            return
+
+        timezone_name = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+        filtered = self.filtered_messages()
+        limit = self.render_limit.value()
+        if self.show_latest.isChecked():
+            visible = filtered[-limit:]
+        else:
+            visible = filtered[:limit]
+
+        blocks: list[str] = []
+        previous_timestamp_ms: int | None = None
+        for message in visible:
+            current_timestamp = message["timestamp_ms"]
+            if (
+                previous_timestamp_ms is not None
+                and current_timestamp - previous_timestamp_ms
+                >= show_messenger_chat.DEFAULT_GAP_SECONDS * 1000
+            ):
+                blocks.append(show_messenger_chat.format_gap(previous_timestamp_ms, current_timestamp))
+                blocks.append("")
+
+            blocks.append(render_message_block(message, timezone_name))
+            blocks.append("")
+            previous_timestamp_ms = current_timestamp
+
+        self.viewer.setPlainText("\n".join(blocks).rstrip())
+
+        rendered_text = f"Showing {len(visible)} of {len(filtered)} matching messages"
+        if len(filtered) > limit:
+            edge = "latest" if self.show_latest.isChecked() else "earliest"
+            rendered_text += f"  (render limit {limit}, {edge} slice)"
+        self.status_label.setText(rendered_text)
 
 
 class ProcessTab(QWidget):
@@ -180,98 +367,6 @@ class ProcessTab(QWidget):
             self.status_label.setText(f"Finished ({exit_code})")
         else:
             self.status_label.setText("Crashed")
-
-
-class MessengerTab(ProcessTab):
-    def __init__(self) -> None:
-        super().__init__("show_messenger_chat")
-        self.path_edit = line_edit("JSON file or folder with message_*.json files")
-        self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
-        self.gap_hours = QDoubleSpinBox()
-        self.gap_hours.setRange(0.1, 24 * 365)
-        self.gap_hours.setValue(6.0)
-        self.gap_hours.setDecimals(1)
-        self.from_enabled, self.from_date = create_date_controls()
-
-        browse_file = QPushButton("Browse File")
-        browse_dir = QPushButton("Browse Folder")
-        browse_file.clicked.connect(self.pick_file)
-        browse_dir.clicked.connect(self.pick_directory)
-
-        controls = QVBoxLayout()
-
-        source_box = QGroupBox("Source")
-        source_layout = QGridLayout(source_box)
-        source_layout.addWidget(QLabel("Path"), 0, 0)
-        source_layout.addWidget(self.path_edit, 0, 1, 1, 3)
-        source_layout.addWidget(browse_file, 1, 2)
-        source_layout.addWidget(browse_dir, 1, 3)
-        controls.addWidget(source_box)
-
-        options_box = QGroupBox("Options")
-        options_layout = QFormLayout(options_box)
-        options_layout.addRow("Timezone", self.timezone_edit)
-        options_layout.addRow("Gap hours", self.gap_hours)
-
-        from_row = QHBoxLayout()
-        from_row.addWidget(self.from_enabled)
-        from_row.addWidget(self.from_date)
-        options_layout.addRow("From date", from_row)
-        controls.addWidget(options_box)
-
-        mode_box = QGroupBox("Mode")
-        mode_layout = QHBoxLayout(mode_box)
-        info_button = QPushButton("Show Info")
-        transcript_button = QPushButton("Render Transcript")
-        info_button.clicked.connect(self.run_info)
-        transcript_button.clicked.connect(self.run_transcript)
-        mode_layout.addWidget(info_button)
-        mode_layout.addWidget(transcript_button)
-        mode_layout.addStretch(1)
-        controls.addWidget(mode_box)
-
-        self.build_shell_layout(controls)
-        self.run_button.hide()
-
-    def pick_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Messenger JSON", "", "JSON Files (*.json)")
-        if path:
-            self.path_edit.setText(path)
-
-    def pick_directory(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Messenger Folder")
-        if path:
-            self.path_edit.setText(path)
-
-    def _base_args(self) -> tuple[list[str], str | None]:
-        args: list[str] = ["--timezone", self.timezone_edit.text().strip() or DEFAULT_TIMEZONE]
-        working_directory: str | None = None
-
-        raw_path = self.path_edit.text().strip()
-        if raw_path:
-            selected = Path(raw_path)
-            if selected.is_dir():
-                working_directory = str(selected)
-            else:
-                args.insert(0, str(selected))
-
-        if self.from_enabled.isChecked():
-            args.extend(["--from", iso_date(self.from_date)])
-
-        return args, working_directory
-
-    def run_info(self) -> None:
-        args, working_directory = self._base_args()
-        args.append("--info")
-        self.start_module(args, working_directory)
-
-    def run_transcript(self) -> None:
-        args, working_directory = self._base_args()
-        args.extend(["--gap-hours", f"{self.gap_hours.value():.1f}"])
-        self.start_module(args, working_directory)
-
-    def run_current(self) -> None:
-        self.run_transcript()
 
 
 class GoogleMailTab(ProcessTab):
