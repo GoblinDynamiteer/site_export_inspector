@@ -1,12 +1,24 @@
 from __future__ import annotations
 
+import html
+import json
 import os
 import shlex
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QDate, QProcess, QProcessEnvironment, Qt
-from PySide6.QtGui import QAction, QFont, QTextCursor
+from PySide6.QtCore import (
+    QDate,
+    QModelIndex,
+    QProcess,
+    QProcessEnvironment,
+    QSortFilterProxyModel,
+    Qt,
+    QUrl,
+)
+from PySide6.QtGui import QAction, QFont, QStandardItem, QStandardItemModel, QTextCursor
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -17,6 +29,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -28,10 +41,12 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QStackedWidget,
     QTabWidget,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
+import runkeeper
 import show_messenger_chat
 
 
@@ -77,11 +92,137 @@ def create_date_controls() -> tuple[QCheckBox, QDateEdit]:
     return checkbox, date_edit
 
 
+def ordinal(value: int) -> str:
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
+
+
+def build_embedded_runkeeper_map_html(
+    activity: runkeeper.Activity,
+    points: list[dict[str, float | str | None]],
+    timezone_name: str,
+) -> str:
+    if not points:
+        raise ValueError("This activity has no track points to render.")
+
+    route_coordinates = [[point["lat"], point["lon"]] for point in points]
+    color = runkeeper.color_for_activity(activity.activity_type)
+    title = html.escape(activity.name)
+    activity_type = html.escape(activity.activity_type)
+    started = html.escape(runkeeper.format_dt(activity.started_at, timezone_name))
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  >
+  <style>
+    html, body, #map {{
+      height: 100%;
+      margin: 0;
+    }}
+    body {{
+      background: #f6f3ec;
+      font-family: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }}
+    #map {{
+      min-height: 320px;
+    }}
+    .summary {{
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      z-index: 700;
+      max-width: min(340px, calc(100% - 24px));
+      padding: 10px 12px;
+      border: 1px solid rgba(20, 33, 61, 0.12);
+      border-radius: 6px;
+      background: rgba(255, 252, 246, 0.94);
+      box-shadow: 0 10px 24px rgba(20, 33, 61, 0.12);
+      color: #14213d;
+    }}
+    .title {{
+      margin: 0 0 4px;
+      font-weight: 700;
+      font-size: 14px;
+      line-height: 1.25;
+    }}
+    .meta {{
+      margin: 0;
+      color: #5f6b7a;
+      font-size: 12px;
+      line-height: 1.35;
+    }}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="summary">
+    <p class="title">{title}</p>
+    <p class="meta">{activity_type} · {started}</p>
+  </div>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    const route = {json.dumps(route_coordinates, separators=(",", ":"))};
+    const map = L.map("map", {{
+      zoomControl: true,
+      attributionControl: true
+    }});
+
+    L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors &copy; CARTO"
+    }}).addTo(map);
+
+    const routeLine = L.polyline(route, {{
+      color: {json.dumps(color)},
+      weight: 5,
+      opacity: 0.9
+    }}).addTo(map);
+
+    L.circleMarker(route[0], {{
+      radius: 7,
+      color: "#ffffff",
+      weight: 2,
+      fillColor: "#2a9d8f",
+      fillOpacity: 1
+    }}).addTo(map).bindPopup("Start");
+
+    L.circleMarker(route[route.length - 1], {{
+      radius: 7,
+      color: "#ffffff",
+      weight: 2,
+      fillColor: "#d1495b",
+      fillOpacity: 1
+    }}).addTo(map).bindPopup("End");
+
+    map.fitBounds(routeLine.getBounds(), {{ padding: [24, 24] }});
+  </script>
+</body>
+</html>
+"""
+
+
 def messenger_search_blob(message: dict, timezone_name: str) -> str:
     values: list[str] = [
         show_messenger_chat.repair_text(message.get("sender_name", "")),
         show_messenger_chat.repair_text(message.get("content", "")),
-        show_messenger_chat.format_swedish_datetime(message["timestamp_ms"], timezone_name),
+        show_messenger_chat.format_swedish_datetime(
+            message["timestamp_ms"], timezone_name
+        ),
     ]
     values.extend(show_messenger_chat.describe_attachment(message))
     reactions = show_messenger_chat.describe_reactions(message)
@@ -105,7 +246,9 @@ class MessengerTab(QWidget):
 
         self.path_edit = line_edit("JSON file or folder with message_*.json files")
         self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
-        self.filter_edit = line_edit("Live filter: sender, text, attachment ref, reaction…")
+        self.filter_edit = line_edit(
+            "Live filter: sender, text, attachment ref, reaction…"
+        )
         self.filter_edit.textChanged.connect(self.refresh_messages)
         self.from_enabled, self.from_date = create_date_controls()
         self.from_enabled.toggled.connect(self.refresh_messages)
@@ -178,7 +321,9 @@ class MessengerTab(QWidget):
         root.addWidget(messages_box, 1)
 
     def pick_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Messenger JSON", "", "JSON Files (*.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Messenger JSON", "", "JSON Files (*.json)"
+        )
         if path:
             self.path_edit.setText(path)
 
@@ -227,15 +372,19 @@ class MessengerTab(QWidget):
         signature = self.thread_signatures[row]
 
         try:
-            self.messages, self.participants, self.paths = show_messenger_chat.load_exports(
-                input_path,
-                target_signature=signature,
+            self.messages, self.participants, self.paths = (
+                show_messenger_chat.load_exports(
+                    input_path,
+                    target_signature=signature,
+                )
             )
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
 
-        participants_text = " / ".join(self.participants) if self.participants else "(none)"
+        participants_text = (
+            " / ".join(self.participants) if self.participants else "(none)"
+        )
         self.info_label.setText(
             f"Files: {len(self.paths)}\nParticipants: {participants_text}\nMessages: {len(self.messages)}"
         )
@@ -245,7 +394,10 @@ class MessengerTab(QWidget):
         if not self.from_enabled.isChecked():
             return None
         try:
-            return show_messenger_chat.parse_from_date(iso_date(self.from_date), self.timezone_edit.text().strip() or DEFAULT_TIMEZONE)
+            return show_messenger_chat.parse_from_date(
+                iso_date(self.from_date),
+                self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
+            )
         except Exception:
             return None
 
@@ -256,9 +408,10 @@ class MessengerTab(QWidget):
         )
 
     def filtered_messages(self) -> list[dict]:
-        timezone_name = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
         from_timestamp = self.current_from_timestamp()
-        filtered = show_messenger_chat.filter_messages_from(self.messages, from_timestamp)
+        filtered = show_messenger_chat.filter_messages_from(
+            self.messages, from_timestamp
+        )
         query = self.filter_edit.text().strip().lower()
         if not query:
             return filtered
@@ -296,7 +449,11 @@ class MessengerTab(QWidget):
                 and current_timestamp - previous_timestamp_ms
                 >= show_messenger_chat.DEFAULT_GAP_SECONDS * 1000
             ):
-                blocks.append(show_messenger_chat.format_gap(previous_timestamp_ms, current_timestamp))
+                blocks.append(
+                    show_messenger_chat.format_gap(
+                        previous_timestamp_ms, current_timestamp
+                    )
+                )
                 blocks.append("")
 
             blocks.append(render_message_block(message, timezone_name))
@@ -371,9 +528,13 @@ class ProcessTab(QWidget):
     def run_current(self) -> None:
         raise NotImplementedError
 
-    def start_module(self, args: list[str], working_directory: str | None = None) -> None:
+    def start_module(
+        self, args: list[str], working_directory: str | None = None
+    ) -> None:
         if self.process.state() != QProcess.NotRunning:
-            QMessageBox.warning(self, "Busy", "A command is already running in this tab.")
+            QMessageBox.warning(
+                self, "Busy", "A command is already running in this tab."
+            )
             return
 
         self.output.clear()
@@ -395,13 +556,17 @@ class ProcessTab(QWidget):
             self.process.kill()
 
     def _drain_stdout(self) -> None:
-        data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        data = bytes(self.process.readAllStandardOutput()).decode(
+            "utf-8", errors="replace"
+        )
         self.output.moveCursor(QTextCursor.End)
         self.output.insertPlainText(data)
         self.output.moveCursor(QTextCursor.End)
 
     def _drain_stderr(self) -> None:
-        data = bytes(self.process.readAllStandardError()).decode("utf-8", errors="replace")
+        data = bytes(self.process.readAllStandardError()).decode(
+            "utf-8", errors="replace"
+        )
         self.output.moveCursor(QTextCursor.End)
         self.output.insertPlainText(data)
         self.output.moveCursor(QTextCursor.End)
@@ -542,21 +707,27 @@ class GoogleMailTab(ProcessTab):
             self.path_edit.setText(path)
 
     def pick_index_output(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save SQLite index", self.index_output.text(), "SQLite (*.sqlite)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save SQLite index", self.index_output.text(), "SQLite (*.sqlite)"
+        )
         if path:
             self.index_output.setText(path)
 
     def run_current(self) -> None:
         input_path = self.path_edit.text().strip()
         if not input_path:
-            QMessageBox.warning(self, "Missing input", "Select an .mbox or .sqlite file first.")
+            QMessageBox.warning(
+                self, "Missing input", "Select an .mbox or .sqlite file first."
+            )
             return
 
         action = self.action_combo.currentText()
         args = [action, input_path]
 
         if action == "info":
-            args.extend(["--timezone", self.timezone_edit.text().strip() or DEFAULT_TIMEZONE])
+            args.extend(
+                ["--timezone", self.timezone_edit.text().strip() or DEFAULT_TIMEZONE]
+            )
             args.extend(["--top", str(self.info_top.value()), "--no-progress"])
         elif action == "search":
             args.extend(split_terms(self.search_terms.text()))
@@ -577,13 +748,27 @@ class GoogleMailTab(ProcessTab):
             if self.search_headers_only.isChecked():
                 args.append("--headers-only")
             args.extend(["--limit", str(self.search_limit.value())])
-            args.extend(["--timezone", self.timezone_edit.text().strip() or DEFAULT_TIMEZONE, "--no-progress"])
+            args.extend(
+                [
+                    "--timezone",
+                    self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
+                    "--no-progress",
+                ]
+            )
         elif action == "show":
             args.append(str(self.show_index.value()))
-            args.extend(["--timezone", self.timezone_edit.text().strip() or DEFAULT_TIMEZONE, "--no-progress"])
+            args.extend(
+                [
+                    "--timezone",
+                    self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
+                    "--no-progress",
+                ]
+            )
         elif action == "index":
             args.append(self.index_output.text().strip() or "gmail_index.sqlite")
-            args.extend(["--max-body-chars", str(self.index_max_body.value()), "--no-progress"])
+            args.extend(
+                ["--max-body-chars", str(self.index_max_body.value()), "--no-progress"]
+            )
             if self.index_force.isChecked():
                 args.append("--force")
 
@@ -628,7 +813,9 @@ class UntappdTab(ProcessTab):
         self.search_max_rating.setDecimals(2)
         self.search_max_rating.setValue(5.0)
         self.search_sort = QComboBox()
-        self.search_sort.addItems(["date-desc", "date-asc", "rating-desc", "rating-asc", "beer", "brewery"])
+        self.search_sort.addItems(
+            ["date-desc", "date-asc", "rating-desc", "rating-asc", "beer", "brewery"]
+        )
         self.search_any = QCheckBox("Match any term")
         self.search_limit = QSpinBox()
         self.search_limit.setRange(1, 5000)
@@ -699,25 +886,35 @@ class UntappdTab(ProcessTab):
         return page
 
     def pick_input(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Untappd JSON", "", "JSON Files (*.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Untappd JSON", "", "JSON Files (*.json)"
+        )
         if path:
             self.path_edit.setText(path)
 
     def run_current(self) -> None:
         input_path = self.path_edit.text().strip()
         if not input_path:
-            QMessageBox.warning(self, "Missing input", "Select an Untappd export JSON file first.")
+            QMessageBox.warning(
+                self, "Missing input", "Select an Untappd export JSON file first."
+            )
             return
 
         action = self.action_combo.currentText()
         args = [action, input_path]
         if action == "info":
             args.extend(["--top", str(self.info_top.value())])
-            args.extend(["--min-ratings-for-top-rated", str(self.info_min_rated.value())])
+            args.extend(
+                ["--min-ratings-for-top-rated", str(self.info_min_rated.value())]
+            )
             beer_value = self.info_beer_count.text().strip()
             venue_value = self.info_venue_count.text().strip()
             if beer_value and venue_value:
-                QMessageBox.warning(self, "Choose one", "Use either beer count or venue count, not both.")
+                QMessageBox.warning(
+                    self,
+                    "Choose one",
+                    "Use either beer count or venue count, not both.",
+                )
                 return
             if beer_value:
                 args.extend(["--beer-count", beer_value])
@@ -744,145 +941,154 @@ class UntappdTab(ProcessTab):
                 args.extend(["--max-rating", f"{self.search_max_rating.value():.2f}"])
             if self.search_any.isChecked():
                 args.append("--any")
-            args.extend(["--limit", str(self.search_limit.value()), "--sort", self.search_sort.currentText()])
+            args.extend(
+                [
+                    "--limit",
+                    str(self.search_limit.value()),
+                    "--sort",
+                    self.search_sort.currentText(),
+                ]
+            )
         elif action == "show":
             identifier = self.show_identifier.text().strip()
             if not identifier:
-                QMessageBox.warning(self, "Missing identifier", "Enter a search-result number or check-in id.")
+                QMessageBox.warning(
+                    self,
+                    "Missing identifier",
+                    "Enter a search-result number or check-in id.",
+                )
                 return
             args.append(identifier)
 
         self.start_module(args)
 
 
-class RunkeeperTab(ProcessTab):
+RUNKEEPER_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+RUNKEEPER_ACTIVITY_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+RUNKEEPER_SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 3
+
+
+class RunkeeperActivityFilterProxy(QSortFilterProxyModel):
     def __init__(self) -> None:
-        super().__init__("runkeeper")
+        super().__init__()
+        self.query_terms: list[str] = []
+
+    def set_query(self, query: str) -> None:
+        self.query_terms = query.lower().split()
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not self.query_terms:
+            return True
+        source_index = self.sourceModel().index(source_row, 0, source_parent)
+        search_blob = self.sourceModel().data(source_index, RUNKEEPER_SEARCH_ROLE) or ""
+        lowered = str(search_blob).lower()
+        return all(term in lowered for term in self.query_terms)
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        left_value = self.sourceModel().data(left, RUNKEEPER_SORT_ROLE)
+        right_value = self.sourceModel().data(right, RUNKEEPER_SORT_ROLE)
+        if left_value is not None and right_value is not None:
+            return left_value < right_value
+        return super().lessThan(left, right)
+
+
+class RunkeeperTab(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.activities: list[runkeeper.Activity] = []
+        self.measurements: list[dict[str, str]] = []
+        self.photos: list[dict[str, str]] = []
+        self.route_points_cache: dict[
+            tuple[str, str], list[dict[str, float | str | None]]
+        ] = {}
+        self.distance_ranks: dict[int, int] = {}
+        self.duration_ranks: dict[int, int] = {}
+        self.selected_activity: runkeeper.Activity | None = None
+
         self.path_edit = line_edit("Runkeeper ZIP export or folder of ZIPs")
         browse_file = QPushButton("Browse ZIP")
         browse_file.clicked.connect(self.pick_input_file)
         browse_directory = QPushButton("Browse Folder")
         browse_directory.clicked.connect(self.pick_input_directory)
-
-        self.action_combo = QComboBox()
-        self.action_combo.addItems(["info", "search", "show", "map"])
-        self.action_stack = QStackedWidget()
-        self.action_combo.currentIndexChanged.connect(self.action_stack.setCurrentIndex)
+        load_button = QPushButton("Load")
+        load_button.clicked.connect(self.load_export)
 
         self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
-        self.info_top = QSpinBox()
-        self.info_top.setRange(1, 500)
-        self.info_top.setValue(10)
+        self.timezone_edit.editingFinished.connect(self.refresh_loaded_display)
+        self.filter_edit = line_edit("Filter activities")
+        self.filter_edit.textChanged.connect(self.apply_filter)
+        self.status_label = QLabel("0/0")
 
-        self.search_terms = line_edit("walking")
-        self.search_type = line_edit()
-        self.search_after_enabled, self.search_after = create_date_controls()
-        self.search_before_enabled, self.search_before = create_date_controls()
-        self.search_min_distance = QDoubleSpinBox()
-        self.search_min_distance.setRange(0.0, 10000.0)
-        self.search_min_distance.setSpecialValueText("Any")
-        self.search_max_distance = QDoubleSpinBox()
-        self.search_max_distance.setRange(0.0, 10000.0)
-        self.search_max_distance.setSpecialValueText("Any")
-        self.search_sort = QComboBox()
-        self.search_sort.addItems([
-            "date-desc",
-            "date-asc",
-            "distance-desc",
-            "distance-asc",
-            "duration-desc",
-            "duration-asc",
-            "pace-asc",
-            "pace-desc",
-            "elevation-desc",
-        ])
-        self.search_limit = QSpinBox()
-        self.search_limit.setRange(1, 5000)
-        self.search_limit.setValue(20)
+        self.model = QStandardItemModel(0, 4, self)
+        self.model.setHorizontalHeaderLabels(
+            ["Started", "Type", "Duration", "Distance"]
+        )
+        self.proxy_model = RunkeeperActivityFilterProxy()
+        self.proxy_model.setSourceModel(self.model)
 
-        self.show_identifier = line_edit("1")
+        self.table = QTableView()
+        self.table.setModel(self.proxy_model)
+        self.table.setSortingEnabled(True)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.setSelectionMode(QTableView.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table.selectionModel().currentRowChanged.connect(self.select_activity)
 
-        self.map_identifier = line_edit("1")
-        self.map_output = line_edit("route.html")
-        self.map_serve = QCheckBox("Serve over local HTTP")
-        self.map_open = QCheckBox("Open in browser")
-        self.map_port = QSpinBox()
-        self.map_port.setRange(1024, 65535)
-        self.map_port.setValue(8000)
-        browse_map_output = QPushButton("Save As…")
-        browse_map_output.clicked.connect(self.pick_map_output)
+        self.detail_text = QPlainTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self.detail_text.setFont(mono)
 
-        controls = QVBoxLayout()
+        self.show_map_button = QPushButton("Show Map")
+        self.show_map_button.clicked.connect(self.show_map)
+        self.show_map_button.setEnabled(False)
+        self.map_view: QWebEngineView | None = None
+        self.map_layout = QVBoxLayout()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+
         source_box = QGroupBox("Source")
         source_layout = QGridLayout(source_box)
         source_layout.addWidget(QLabel("Path"), 0, 0)
         source_layout.addWidget(self.path_edit, 0, 1, 1, 2)
         source_layout.addWidget(browse_file, 0, 3)
         source_layout.addWidget(browse_directory, 0, 4)
-        controls.addWidget(source_box)
+        source_layout.addWidget(load_button, 0, 5)
+        source_layout.addWidget(QLabel("Timezone"), 1, 0)
+        source_layout.addWidget(self.timezone_edit, 1, 1, 1, 2)
+        root.addWidget(source_box)
 
-        action_box = QGroupBox("Action")
-        action_layout = QVBoxLayout(action_box)
-        action_layout.addWidget(self.action_combo)
-        action_layout.addWidget(self.action_stack)
-        controls.addWidget(action_box)
+        filter_box = QGroupBox("Filter")
+        filter_layout = QHBoxLayout(filter_box)
+        filter_layout.addWidget(self.filter_edit)
+        filter_layout.addWidget(self.status_label)
+        root.addWidget(filter_box)
 
-        self.action_stack.addWidget(self._build_info_page())
-        self.action_stack.addWidget(self._build_search_page())
-        self.action_stack.addWidget(self._build_show_page())
-        self.action_stack.addWidget(self._build_map_page(browse_map_output))
+        table_box = QGroupBox("Activities")
+        table_layout = QVBoxLayout(table_box)
+        table_layout.addWidget(self.table)
+        root.addWidget(table_box, 2)
 
-        self.build_shell_layout(controls)
-
-    def _build_info_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Top rows", self.info_top)
-        return page
-
-    def _build_search_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Terms", self.search_terms)
-        layout.addRow("Type filter", self.search_type)
-
-        after_row = QHBoxLayout()
-        after_row.addWidget(self.search_after_enabled)
-        after_row.addWidget(self.search_after)
-        layout.addRow("After", after_row)
-
-        before_row = QHBoxLayout()
-        before_row.addWidget(self.search_before_enabled)
-        before_row.addWidget(self.search_before)
-        layout.addRow("Before", before_row)
-
-        layout.addRow("Min distance km", self.search_min_distance)
-        layout.addRow("Max distance km", self.search_max_distance)
-        layout.addRow("Sort", self.search_sort)
-        layout.addRow("Limit", self.search_limit)
-        return page
-
-    def _build_show_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Identifier", self.show_identifier)
-        return page
-
-    def _build_map_page(self, browse_map_output: QPushButton) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Identifier", self.map_identifier)
-        output_row = QHBoxLayout()
-        output_row.addWidget(self.map_output)
-        output_row.addWidget(browse_map_output)
-        layout.addRow("Output HTML", output_row)
-        layout.addRow("Port", self.map_port)
-        layout.addRow("", self.map_serve)
-        layout.addRow("", self.map_open)
-        return page
+        detail_box = QGroupBox("Details")
+        detail_layout = QVBoxLayout(detail_box)
+        detail_layout.addWidget(self.detail_text)
+        detail_layout.addWidget(self.show_map_button)
+        detail_layout.addLayout(self.map_layout)
+        root.addWidget(detail_box, 2)
 
     def pick_input_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Runkeeper ZIP", "", "ZIP Files (*.zip)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Runkeeper ZIP", "", "ZIP Files (*.zip)"
+        )
         if path:
             self.path_edit.setText(path)
 
@@ -891,57 +1097,219 @@ class RunkeeperTab(ProcessTab):
         if path:
             self.path_edit.setText(path)
 
-    def pick_map_output(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save route HTML", self.map_output.text(), "HTML Files (*.html)")
-        if path:
-            self.map_output.setText(path)
-
-    def run_current(self) -> None:
+    def load_export(self) -> None:
         input_path = self.path_edit.text().strip()
         if not input_path:
-            QMessageBox.warning(self, "Missing input", "Select a Runkeeper ZIP file or folder first.")
+            QMessageBox.warning(
+                self, "Missing input", "Select a Runkeeper ZIP file or folder first."
+            )
             return
 
-        action = self.action_combo.currentText()
-        args = [action, input_path]
-        timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
-        if action == "info":
-            args.extend(["--top", str(self.info_top.value()), "--timezone", timezone])
-        elif action == "search":
-            args.extend(split_terms(self.search_terms.text()))
-            if self.search_type.text().strip():
-                args.extend(["--type", self.search_type.text().strip()])
-            if self.search_after_enabled.isChecked():
-                args.extend(["--after", iso_date(self.search_after)])
-            if self.search_before_enabled.isChecked():
-                args.extend(["--before", iso_date(self.search_before)])
-            if self.search_min_distance.value() > 0:
-                args.extend(["--min-distance", f"{self.search_min_distance.value():.2f}"])
-            if self.search_max_distance.value() > 0:
-                args.extend(["--max-distance", f"{self.search_max_distance.value():.2f}"])
-            args.extend(["--limit", str(self.search_limit.value()), "--sort", self.search_sort.currentText(), "--timezone", timezone])
-        elif action == "show":
-            identifier = self.show_identifier.text().strip()
-            if not identifier:
-                QMessageBox.warning(self, "Missing identifier", "Enter an activity index or GPX file name.")
-                return
-            args.extend([identifier, "--timezone", timezone])
-        elif action == "map":
-            identifier = self.map_identifier.text().strip()
-            if not identifier:
-                QMessageBox.warning(self, "Missing identifier", "Enter an activity index or GPX file name.")
-                return
-            args.extend([identifier, "--timezone", timezone])
-            output_path = self.map_output.text().strip()
-            if output_path:
-                args.extend(["--output", output_path])
-            if self.map_serve.isChecked():
-                args.append("--serve")
-            if self.map_open.isChecked():
-                args.append("--open")
-            args.extend(["--port", str(self.map_port.value())])
+        try:
+            self.activities, self.measurements, self.photos = runkeeper.load_export(
+                Path(input_path)
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return
 
-        self.start_module(args)
+        self.route_points_cache.clear()
+        if self.map_view is not None:
+            self.map_view.setHtml("<html><body></body></html>")
+        self.rebuild_ranks()
+        self.populate_table()
+        self.apply_filter()
+
+        if self.proxy_model.rowCount() > 0:
+            self.table.selectRow(0)
+        else:
+            self.selected_activity = None
+            self.detail_text.setPlainText("No GPX activities found.")
+            self.show_map_button.setEnabled(False)
+            if self.map_view is not None:
+                self.map_view.setHtml("<html><body></body></html>")
+
+    def rebuild_ranks(self) -> None:
+        self.distance_ranks = self.rank_by_type("distance")
+        self.duration_ranks = self.rank_by_type("duration")
+
+    def rank_by_type(self, metric: str) -> dict[int, int]:
+        ranks: dict[int, int] = {}
+        by_type: dict[str, list[runkeeper.Activity]] = {}
+        for activity in self.activities:
+            by_type.setdefault(activity.activity_type, []).append(activity)
+
+        for activities in by_type.values():
+            if metric == "distance":
+                values = [activity.distance_km for activity in activities]
+                for activity in activities:
+                    ranks[activity.index] = 1 + sum(
+                        value > activity.distance_km for value in values
+                    )
+            else:
+                values = [activity.duration_seconds for activity in activities]
+                for activity in activities:
+                    ranks[activity.index] = 1 + sum(
+                        value > activity.duration_seconds for value in values
+                    )
+        return ranks
+
+    def populate_table(self) -> None:
+        self.model.removeRows(0, self.model.rowCount())
+        timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+        for activity in self.activities:
+            row = [
+                QStandardItem(
+                    activity.started_at.astimezone(ZoneInfo(timezone)).strftime(
+                        "%Y-%m-%d %H:%M"
+                    )
+                ),
+                QStandardItem(activity.activity_type),
+                QStandardItem(runkeeper.format_duration(activity.duration_seconds)),
+                QStandardItem(f"{activity.distance_km:.2f} km"),
+            ]
+            sort_values = [
+                activity.started_at.timestamp(),
+                activity.activity_type.lower(),
+                activity.duration_seconds,
+                activity.distance_km,
+            ]
+            search_blob = self.activity_search_blob(activity)
+            for column, item in enumerate(row):
+                item.setEditable(False)
+                item.setData(activity, RUNKEEPER_ACTIVITY_ROLE)
+                item.setData(search_blob, RUNKEEPER_SEARCH_ROLE)
+                item.setData(sort_values[column], RUNKEEPER_SORT_ROLE)
+            self.model.appendRow(row)
+        self.proxy_model.sort(0, Qt.DescendingOrder)
+
+    def refresh_loaded_display(self) -> None:
+        if not self.activities:
+            return
+        self.populate_table()
+        self.apply_filter()
+        if self.selected_activity is not None:
+            self.render_details(self.selected_activity)
+
+    def apply_filter(self) -> None:
+        self.proxy_model.set_query(self.filter_edit.text())
+        self.update_status()
+
+    def update_status(self) -> None:
+        self.status_label.setText(
+            f"{self.proxy_model.rowCount()}/{len(self.activities)}"
+        )
+
+    def select_activity(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        if not current.isValid():
+            self.selected_activity = None
+            self.detail_text.clear()
+            self.show_map_button.setEnabled(False)
+            return
+
+        source_index = self.proxy_model.mapToSource(current)
+        activity = self.model.item(source_index.row(), 0).data(RUNKEEPER_ACTIVITY_ROLE)
+        self.selected_activity = activity
+        self.render_details(activity)
+        self.show_map_button.setEnabled(True)
+        if self.map_view is not None:
+            self.map_view.setHtml("<html><body></body></html>")
+
+    def activity_search_blob(self, activity: runkeeper.Activity) -> str:
+        timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+        fields = [
+            activity.name,
+            activity.file_name,
+            activity.activity_type,
+            runkeeper.format_dt(activity.started_at, timezone),
+            runkeeper.format_dt(activity.finished_at, timezone),
+            runkeeper.format_duration(activity.duration_seconds),
+            f"{activity.distance_km:.2f} km",
+            runkeeper.format_pace(activity.distance_km, activity.duration_seconds),
+            runkeeper.format_speed(activity.distance_km, activity.duration_seconds),
+            f"{activity.elevation_gain_m:.0f} m",
+            str(activity.point_count),
+            str(activity.archive_path),
+            self.distance_rank_label(activity),
+            self.duration_rank_label(activity),
+        ]
+        if activity.start_lat is not None and activity.start_lon is not None:
+            fields.append(f"{activity.start_lat:.6f}, {activity.start_lon:.6f}")
+        if activity.end_lat is not None and activity.end_lon is not None:
+            fields.append(f"{activity.end_lat:.6f}, {activity.end_lon:.6f}")
+        return "\n".join(fields)
+
+    def render_details(self, activity: runkeeper.Activity) -> None:
+        timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+        lines = [
+            f"Name: {activity.name}",
+            f"File: {activity.file_name}",
+            f"Type: {activity.activity_type}",
+            f"Started: {runkeeper.format_dt(activity.started_at, timezone)}",
+            f"Finished: {runkeeper.format_dt(activity.finished_at, timezone)}",
+            f"Duration: {runkeeper.format_duration(activity.duration_seconds)} ({self.duration_rank_label(activity)})",
+            f"Distance: {activity.distance_km:.2f} km ({self.distance_rank_label(activity)})",
+            f"Pace: {runkeeper.format_pace(activity.distance_km, activity.duration_seconds)}",
+            f"Speed: {runkeeper.format_speed(activity.distance_km, activity.duration_seconds)}",
+            f"Elevation gain: {activity.elevation_gain_m:.0f} m",
+            f"Track points: {activity.point_count}",
+        ]
+        if activity.start_lat is not None and activity.start_lon is not None:
+            lines.append(f"Start: {activity.start_lat:.6f}, {activity.start_lon:.6f}")
+        if activity.end_lat is not None and activity.end_lon is not None:
+            lines.append(f"End: {activity.end_lat:.6f}, {activity.end_lon:.6f}")
+        lines.extend(
+            [
+                f"Archive: {activity.archive_path}",
+                f"Photo entries in loaded export data: {len(self.photos)}",
+            ]
+        )
+        if self.photos:
+            lines.append(
+                "Photo note: photos.csv uses activity UUIDs that are not exposed in the GPX file names."
+            )
+        self.detail_text.setPlainText("\n".join(lines))
+
+    def distance_rank_label(self, activity: runkeeper.Activity) -> str:
+        rank = self.distance_ranks.get(activity.index)
+        if rank is None:
+            return f"unranked {activity.activity_type} distance"
+        return f"{ordinal(rank)} longest {activity.activity_type} distance"
+
+    def duration_rank_label(self, activity: runkeeper.Activity) -> str:
+        rank = self.duration_ranks.get(activity.index)
+        if rank is None:
+            return f"unranked {activity.activity_type} duration"
+        return f"{ordinal(rank)} longest {activity.activity_type} duration"
+
+    def show_map(self) -> None:
+        if self.selected_activity is None:
+            return
+
+        activity = self.selected_activity
+        cache_key = (str(activity.archive_path), activity.file_name)
+        try:
+            points = self.route_points_cache.get(cache_key)
+            if points is None:
+                points = runkeeper.load_route_points(
+                    activity.archive_path, activity.file_name
+                )
+                self.route_points_cache[cache_key] = points
+            map_html = build_embedded_runkeeper_map_html(
+                activity,
+                points,
+                self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Map failed", str(exc))
+            return
+
+        if self.map_view is None:
+            self.map_view = QWebEngineView()
+            self.map_view.setMinimumHeight(320)
+            self.map_layout.addWidget(self.map_view)
+
+        self.map_view.setHtml(map_html, QUrl("https://carto.com/"))
 
 
 class MainWindow(QMainWindow):
