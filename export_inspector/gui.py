@@ -5,11 +5,16 @@ import json
 import os
 import shlex
 import sys
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import (
+    QBuffer,
+    QByteArray,
     QDate,
+    QIODevice,
+    QPoint,
     QModelIndex,
     QProcess,
     QProcessEnvironment,
@@ -18,7 +23,16 @@ from PySide6.QtCore import (
     Qt,
     QUrl,
 )
-from PySide6.QtGui import QAction, QFont, QStandardItem, QStandardItemModel, QTextCursor
+from PySide6.QtGui import (
+    QAction,
+    QFont,
+    QImageReader,
+    QPixmap,
+    QStandardItem,
+    QStandardItemModel,
+    QTextCursor,
+)
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,7 +53,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QDoubleSpinBox,
     QStackedWidget,
     QTabWidget,
     QTableView,
@@ -49,6 +62,7 @@ from PySide6.QtWidgets import (
 
 import runkeeper
 import show_messenger_chat
+import untappd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -128,6 +142,20 @@ def ordinal(value: int) -> str:
     else:
         suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
     return f"{value}{suffix}"
+
+
+def pixmap_from_image_data(data: bytes) -> QPixmap:
+    buffer = QBuffer()
+    buffer.setData(QByteArray(data))
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    reader = QImageReader(buffer)
+    reader.setAutoTransform(True)
+    image = reader.read()
+    if image.isNull():
+        pixmap = QPixmap()
+        pixmap.loadFromData(data)
+        return pixmap
+    return QPixmap.fromImage(image)
 
 
 def build_embedded_runkeeper_map_html(
@@ -830,116 +858,208 @@ class GoogleMailTab(ProcessTab):
         self.start_module(args)
 
 
-class UntappdTab(ProcessTab):
+UNTAPPD_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 11
+UNTAPPD_ENTRY_ROLE = int(Qt.ItemDataRole.UserRole) + 12
+UNTAPPD_SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 13
+
+
+class UntappdEntryFilterProxy(QSortFilterProxyModel):
     def __init__(self) -> None:
-        super().__init__("untappd")
+        super().__init__()
+        self.query_terms: list[str] = []
+
+    def set_query(self, query: str) -> None:
+        self.query_terms = query.lower().split()
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not self.query_terms:
+            return True
+        source_index = self.sourceModel().index(source_row, 0, source_parent)
+        search_blob = self.sourceModel().data(source_index, UNTAPPD_SEARCH_ROLE) or ""
+        lowered = str(search_blob).lower()
+        return all(term in lowered for term in self.query_terms)
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        left_value = self.sourceModel().data(left, UNTAPPD_SORT_ROLE)
+        right_value = self.sourceModel().data(right, UNTAPPD_SORT_ROLE)
+        if left_value is not None and right_value is not None:
+            return left_value < right_value
+        return super().lessThan(left, right)
+
+
+class PhotoPreviewLabel(QLabel):
+    def __init__(self) -> None:
+        super().__init__("No photo")
+        self.original_pixmap: QPixmap | None = None
+        self.overlay: QLabel | None = None
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumSize(320, 260)
+        self.setWordWrap(True)
+
+    def set_photo(self, pixmap: QPixmap | None, empty_text: str = "No photo") -> None:
+        self.original_pixmap = pixmap
+        if pixmap is None or pixmap.isNull():
+            self.setText(empty_text)
+            self.setPixmap(QPixmap())
+            self.close_overlay()
+            return
+        self.setText("")
+        self.update_scaled_pixmap()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.update_scaled_pixmap()
+
+    def mousePressEvent(self, event) -> None:
+        if (
+            event.button() == Qt.LeftButton
+            and self.original_pixmap is not None
+            and not self.original_pixmap.isNull()
+        ):
+            self.show_overlay(event.globalPosition().toPoint())
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self.close_overlay()
+        super().mouseReleaseEvent(event)
+
+    def update_scaled_pixmap(self) -> None:
+        if self.original_pixmap is None or self.original_pixmap.isNull():
+            return
+        scaled = self.original_pixmap.scaled(
+            self.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+
+    def show_overlay(self, position: QPoint) -> None:
+        self.close_overlay()
+        if self.original_pixmap is None:
+            return
+        screen = QApplication.screenAt(position) or self.screen()
+        available = screen.availableGeometry() if screen else None
+        pixmap = self.original_pixmap
+        if available is not None:
+            max_size = available.size() * 0.95
+            if pixmap.width() > max_size.width() or pixmap.height() > max_size.height():
+                pixmap = pixmap.scaled(
+                    max_size,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+
+        overlay = QLabel()
+        overlay.setWindowFlags(
+            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        )
+        overlay.setAttribute(Qt.WA_DeleteOnClose)
+        overlay.setPixmap(pixmap)
+        overlay.adjustSize()
+        overlay_position = position + QPoint(12, 12)
+        if available is not None:
+            overlay_position.setX(
+                min(
+                    max(overlay_position.x(), available.left()),
+                    available.right() - overlay.width() + 1,
+                )
+            )
+            overlay_position.setY(
+                min(
+                    max(overlay_position.y(), available.top()),
+                    available.bottom() - overlay.height() + 1,
+                )
+            )
+        overlay.move(overlay_position)
+        overlay.mouseReleaseEvent = lambda event: overlay.close()
+        overlay.show()
+        self.overlay = overlay
+
+    def close_overlay(self) -> None:
+        if self.overlay is not None:
+            self.overlay.close()
+            self.overlay = None
+
+
+class UntappdTab(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entries: list[dict] = []
+        self.had_counts: dict[str, int] = {}
+        self.had_indexes: dict[str, int] = {}
+        self.checkin_indexes: dict[str, int] = {}
+        self.selected_entry: dict | None = None
+        self.photo_cache: dict[str, QPixmap] = {}
+        self.pending_photo_urls: set[str] = set()
+
         self.path_edit = line_edit("Untappd export JSON")
         self.path_edit.setText(settings_text("untappd/input_path"))
         browse_input = QPushButton("Browse")
         browse_input.clicked.connect(self.pick_input)
+        load_button = QPushButton("Load")
+        load_button.clicked.connect(self.load_export)
 
-        self.action_combo = QComboBox()
-        self.action_combo.addItems(["info", "search", "show"])
-        self.action_stack = QStackedWidget()
-        self.action_combo.currentIndexChanged.connect(self.action_stack.setCurrentIndex)
+        self.filter_edit = line_edit("Filter check-ins")
+        self.filter_edit.textChanged.connect(self.apply_filter)
+        self.status_label = QLabel("0/0")
 
-        self.info_top = QSpinBox()
-        self.info_top.setRange(1, 500)
-        self.info_top.setValue(10)
-        self.info_min_rated = QSpinBox()
-        self.info_min_rated.setRange(1, 500)
-        self.info_min_rated.setValue(3)
-        self.info_beer_count = line_edit("Punk IPA")
-        self.info_venue_count = line_edit("Ölstugan Gull-Olle")
-
-        self.search_terms = line_edit("stout omnipollo")
-        self.search_beer = line_edit()
-        self.search_brewery = line_edit()
-        self.search_type = line_edit()
-        self.search_venue = line_edit()
-        self.search_country = line_edit()
-        self.search_after_enabled, self.search_after = create_date_controls()
-        self.search_before_enabled, self.search_before = create_date_controls()
-        self.search_min_rating = QDoubleSpinBox()
-        self.search_min_rating.setRange(0.0, 5.0)
-        self.search_min_rating.setDecimals(2)
-        self.search_min_rating.setSpecialValueText("Any")
-        self.search_max_rating = QDoubleSpinBox()
-        self.search_max_rating.setRange(0.0, 5.0)
-        self.search_max_rating.setDecimals(2)
-        self.search_max_rating.setValue(5.0)
-        self.search_sort = QComboBox()
-        self.search_sort.addItems(
-            ["date-desc", "date-asc", "rating-desc", "rating-asc", "beer", "brewery"]
+        self.model = QStandardItemModel(0, 8, self)
+        self.model.setHorizontalHeaderLabels(
+            ["Date", "Check-in", "Brewery", "Beer", "ABV", "Type", "Rating", "Had"]
         )
-        self.search_any = QCheckBox("Match any term")
-        self.search_limit = QSpinBox()
-        self.search_limit.setRange(1, 5000)
-        self.search_limit.setValue(20)
+        self.proxy_model = UntappdEntryFilterProxy()
+        self.proxy_model.setSourceModel(self.model)
 
-        self.show_identifier = line_edit("1")
+        self.table = QTableView()
+        self.table.setModel(self.proxy_model)
+        self.table.setSortingEnabled(True)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.setSelectionMode(QTableView.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table.selectionModel().currentRowChanged.connect(self.select_entry)
 
-        controls = QVBoxLayout()
+        self.detail_text = QPlainTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self.detail_text.setFont(mono)
+        self.photo_label = PhotoPreviewLabel()
+        self.network_manager = QNetworkAccessManager(self)
+        self.network_manager.finished.connect(self.photo_download_finished)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+
         source_box = QGroupBox("Source")
         source_layout = QGridLayout(source_box)
         source_layout.addWidget(QLabel("Path"), 0, 0)
         source_layout.addWidget(self.path_edit, 0, 1, 1, 2)
         source_layout.addWidget(browse_input, 0, 3)
-        controls.addWidget(source_box)
+        source_layout.addWidget(load_button, 0, 4)
+        root.addWidget(source_box)
 
-        action_box = QGroupBox("Action")
-        action_layout = QVBoxLayout(action_box)
-        action_layout.addWidget(self.action_combo)
-        action_layout.addWidget(self.action_stack)
-        controls.addWidget(action_box)
+        filter_box = QGroupBox("Filter")
+        filter_layout = QHBoxLayout(filter_box)
+        filter_layout.addWidget(self.filter_edit)
+        filter_layout.addWidget(self.status_label)
+        root.addWidget(filter_box)
 
-        self.action_stack.addWidget(self._build_info_page())
-        self.action_stack.addWidget(self._build_search_page())
-        self.action_stack.addWidget(self._build_show_page())
+        table_box = QGroupBox("Check-ins")
+        table_layout = QVBoxLayout(table_box)
+        table_layout.addWidget(self.table)
+        root.addWidget(table_box, 2)
 
-        self.build_shell_layout(controls)
-
-    def _build_info_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Top rows", self.info_top)
-        layout.addRow("Min ratings for top rated", self.info_min_rated)
-        layout.addRow("Beer count", self.info_beer_count)
-        layout.addRow("Venue count", self.info_venue_count)
-        return page
-
-    def _build_search_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Terms", self.search_terms)
-        layout.addRow("Beer filter", self.search_beer)
-        layout.addRow("Brewery filter", self.search_brewery)
-        layout.addRow("Type filter", self.search_type)
-        layout.addRow("Venue filter", self.search_venue)
-        layout.addRow("Country filter", self.search_country)
-
-        after_row = QHBoxLayout()
-        after_row.addWidget(self.search_after_enabled)
-        after_row.addWidget(self.search_after)
-        layout.addRow("After", after_row)
-
-        before_row = QHBoxLayout()
-        before_row.addWidget(self.search_before_enabled)
-        before_row.addWidget(self.search_before)
-        layout.addRow("Before", before_row)
-
-        layout.addRow("Min rating", self.search_min_rating)
-        layout.addRow("Max rating", self.search_max_rating)
-        layout.addRow("Sort", self.search_sort)
-        layout.addRow("Limit", self.search_limit)
-        layout.addRow("", self.search_any)
-        return page
-
-    def _build_show_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Identifier", self.show_identifier)
-        return page
+        detail_box = QGroupBox("Details")
+        detail_layout = QHBoxLayout(detail_box)
+        detail_layout.addWidget(self.detail_text, 2)
+        detail_layout.addWidget(self.photo_label, 1)
+        root.addWidget(detail_box, 1)
 
     def pick_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -952,7 +1072,7 @@ class UntappdTab(ProcessTab):
             self.path_edit.setText(path)
             remember_text("untappd/input_path", path)
 
-    def run_current(self) -> None:
+    def load_export(self) -> None:
         input_path = self.path_edit.text().strip()
         if not input_path:
             QMessageBox.warning(
@@ -960,69 +1080,291 @@ class UntappdTab(ProcessTab):
             )
             return
 
-        remember_text("untappd/input_path", input_path)
+        try:
+            self.entries = untappd.load_export(Path(input_path))
+        except Exception as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return
 
-        action = self.action_combo.currentText()
-        args = [action, input_path]
-        if action == "info":
-            args.extend(["--top", str(self.info_top.value())])
-            args.extend(
-                ["--min-ratings-for-top-rated", str(self.info_min_rated.value())]
-            )
-            beer_value = self.info_beer_count.text().strip()
-            venue_value = self.info_venue_count.text().strip()
-            if beer_value and venue_value:
-                QMessageBox.warning(
-                    self,
-                    "Choose one",
-                    "Use either beer count or venue count, not both.",
-                )
-                return
-            if beer_value:
-                args.extend(["--beer-count", beer_value])
-            if venue_value:
-                args.extend(["--venue-count", venue_value])
-        elif action == "search":
-            args.extend(split_terms(self.search_terms.text()))
-            for flag, value in (
-                ("--beer", self.search_beer.text().strip()),
-                ("--brewery", self.search_brewery.text().strip()),
-                ("--type", self.search_type.text().strip()),
-                ("--venue", self.search_venue.text().strip()),
-                ("--country", self.search_country.text().strip()),
-            ):
-                if value:
-                    args.extend([flag, value])
-            if self.search_after_enabled.isChecked():
-                args.extend(["--after", iso_date(self.search_after)])
-            if self.search_before_enabled.isChecked():
-                args.extend(["--before", iso_date(self.search_before)])
-            if self.search_min_rating.value() > 0:
-                args.extend(["--min-rating", f"{self.search_min_rating.value():.2f}"])
-            if self.search_max_rating.value() < 5.0:
-                args.extend(["--max-rating", f"{self.search_max_rating.value():.2f}"])
-            if self.search_any.isChecked():
-                args.append("--any")
-            args.extend(
+        remember_text("untappd/input_path", input_path)
+        self.rebuild_had_counts()
+        self.populate_table()
+        self.apply_filter()
+
+        if self.proxy_model.rowCount() > 0:
+            self.table.selectRow(0)
+        else:
+            self.selected_entry = None
+            self.detail_text.setPlainText("No check-ins found.")
+            self.photo_label.set_photo(None)
+
+    def rebuild_had_counts(self) -> None:
+        counts: dict[str, int] = {}
+        indexes: dict[str, int] = {}
+        checkin_indexes: dict[str, int] = {}
+        sorted_entries = sorted(
+            self.entries,
+            key=lambda item: self.entry_created_dt(item) or datetime.min,
+        )
+        for checkin_index, entry in enumerate(sorted_entries, start=1):
+            key = self.beer_key(entry)
+            counts[key] = counts.get(key, 0) + 1
+            indexes[self.entry_key(entry)] = counts[key]
+            checkin_indexes[self.entry_key(entry)] = checkin_index
+        self.had_counts = counts
+        self.had_indexes = indexes
+        self.checkin_indexes = checkin_indexes
+
+    def populate_table(self) -> None:
+        self.model.removeRows(0, self.model.rowCount())
+        for entry in self.entries:
+            created_dt = self.entry_created_dt(entry)
+            created_text = created_dt.strftime("%Y-%m-%d %H:%M") if created_dt else "-"
+            rating_value = untappd.parse_rating(entry)
+            had_index = self.had_index(entry)
+            checkin_index = self.checkin_index(entry)
+            row = [
+                QStandardItem(created_text),
+                QStandardItem(str(checkin_index)),
+                QStandardItem(untappd.normalize_text(entry.get("brewery_name")) or "-"),
+                QStandardItem(untappd.normalize_text(entry.get("beer_name")) or "-"),
+                QStandardItem(self.abv_table_text(entry)),
+                QStandardItem(untappd.normalize_text(entry.get("beer_type")) or "-"),
+                QStandardItem(untappd.display_rating(entry)),
+                QStandardItem(str(had_index)),
+            ]
+            sort_values = [
+                created_dt.timestamp() if created_dt else 0,
+                checkin_index,
+                untappd.normalize_text(entry.get("brewery_name")).lower(),
+                untappd.normalize_text(entry.get("beer_name")).lower(),
+                self.abv_sort_value(entry),
+                untappd.normalize_text(entry.get("beer_type")).lower(),
+                rating_value if rating_value is not None else -1,
+                had_index,
+            ]
+            search_blob = self.entry_search_blob(entry)
+            for column, item in enumerate(row):
+                item.setEditable(False)
+                item.setData(entry, UNTAPPD_ENTRY_ROLE)
+                item.setData(search_blob, UNTAPPD_SEARCH_ROLE)
+                item.setData(sort_values[column], UNTAPPD_SORT_ROLE)
+            self.model.appendRow(row)
+        self.proxy_model.sort(0, Qt.DescendingOrder)
+
+    def apply_filter(self) -> None:
+        self.proxy_model.set_query(self.filter_edit.text())
+        self.status_label.setText(f"{self.proxy_model.rowCount()}/{len(self.entries)}")
+
+    def select_entry(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        if not current.isValid():
+            self.selected_entry = None
+            self.detail_text.clear()
+            self.photo_label.set_photo(None)
+            return
+
+        source_index = self.proxy_model.mapToSource(current)
+        entry = self.model.item(source_index.row(), 0).data(UNTAPPD_ENTRY_ROLE)
+        self.selected_entry = entry
+        self.render_details(entry)
+        self.update_photo(entry)
+
+    def beer_key(self, entry: dict) -> str:
+        bid = untappd.normalize_text(entry.get("bid"))
+        if bid:
+            return f"bid:{bid}"
+        beer = untappd.normalize_text(entry.get("beer_name")).lower()
+        brewery = untappd.normalize_text(entry.get("brewery_name")).lower()
+        return f"name:{brewery}|{beer}"
+
+    def entry_key(self, entry: dict) -> str:
+        checkin_id = untappd.normalize_text(entry.get("checkin_id"))
+        if checkin_id:
+            return f"checkin:{checkin_id}"
+        created = untappd.normalize_text(entry.get("created_at"))
+        return f"fallback:{self.beer_key(entry)}|{created}"
+
+    def had_count(self, entry: dict) -> int:
+        return self.had_counts.get(self.beer_key(entry), 0)
+
+    def had_index(self, entry: dict) -> int:
+        return self.had_indexes.get(self.entry_key(entry), 0)
+
+    def checkin_index(self, entry: dict) -> int:
+        return self.checkin_indexes.get(self.entry_key(entry), 0)
+
+    def abv_table_text(self, entry: dict) -> str:
+        abv = untappd.normalize_text(entry.get("beer_abv"))
+        if not abv:
+            return "-"
+        return f"{self.format_abv(abv)}%"
+
+    def format_abv(self, value: str) -> str:
+        try:
+            return f"{float(value):.1f}"
+        except ValueError:
+            return untappd.format_float(value)
+
+    def abv_sort_value(self, entry: dict) -> float:
+        try:
+            return float(untappd.normalize_text(entry.get("beer_abv")))
+        except ValueError:
+            return -1.0
+
+    def entry_created_dt(self, entry: dict) -> datetime | None:
+        created = untappd.normalize_text(entry.get("created_at"))
+        if not created:
+            return None
+        try:
+            return untappd.parse_created_at(created)
+        except Exception:
+            return None
+
+    def entry_search_blob(self, entry: dict) -> str:
+        fields = [
+            untappd.normalize_text(entry.get("created_at")),
+            str(self.checkin_index(entry)),
+            untappd.normalize_text(entry.get("beer_name")),
+            self.abv_table_text(entry),
+            untappd.normalize_text(entry.get("brewery_name")),
+            untappd.normalize_text(entry.get("beer_type")),
+            untappd.display_rating(entry),
+            str(self.had_count(entry)),
+            str(self.had_index(entry)),
+            untappd.normalize_text(entry.get("venue_name")),
+            untappd.normalize_text(entry.get("purchase_venue")),
+            untappd.normalize_text(entry.get("brewery_country")),
+            untappd.normalize_text(entry.get("venue_country")),
+            untappd.normalize_text(entry.get("comment")),
+            untappd.normalize_text(entry.get("flavor_profiles")),
+            untappd.normalize_text(entry.get("serving_type")),
+            untappd.normalize_text(entry.get("tagged_friends")),
+            untappd.normalize_text(entry.get("checkin_id")),
+        ]
+        return "\n".join(field for field in fields if field)
+
+    def render_details(self, entry: dict) -> None:
+        ordered_fields = [
+            ("Beer", "beer_name"),
+            ("Brewery", "brewery_name"),
+            ("Type", "beer_type"),
+            ("Check-in", None),
+            ("Total had with this check-in", None),
+            ("Total Had", None),
+            ("Your rating", "rating_score"),
+            ("Global rating", "global_rating_score"),
+            ("Weighted global rating", "global_weighted_rating_score"),
+            ("ABV", "beer_abv"),
+            ("IBU", "beer_ibu"),
+            ("Created at", "created_at"),
+            ("Venue", "venue_name"),
+            ("Venue city", "venue_city"),
+            ("Venue state", "venue_state"),
+            ("Venue country", "venue_country"),
+            ("Purchase venue", "purchase_venue"),
+            ("Serving type", "serving_type"),
+            ("Flavor profiles", "flavor_profiles"),
+            ("Tagged friends", "tagged_friends"),
+            ("Toasts", "total_toasts"),
+            ("Comments", "total_comments"),
+            ("Brewery city", "brewery_city"),
+            ("Brewery state", "brewery_state"),
+            ("Brewery country", "brewery_country"),
+            ("Venue lat", "venue_lat"),
+            ("Venue lng", "venue_lng"),
+            ("Check-in ID", "checkin_id"),
+            ("Beer ID", "bid"),
+            ("Brewery ID", "brewery_id"),
+            ("Check-in URL", "checkin_url"),
+            ("Beer URL", "beer_url"),
+            ("Brewery URL", "brewery_url"),
+            ("Photo URL", "photo_url"),
+        ]
+
+        lines: list[str] = []
+        for label, key in ordered_fields:
+            if key is None:
+                if label == "Check-in":
+                    lines.append(f"{label}: {self.checkin_index(entry)}")
+                elif label == "Total had with this check-in":
+                    lines.append(f"{label}: {self.had_index(entry)}")
+                else:
+                    lines.append(f"{label}: {self.had_count(entry)}")
+                continue
+            value = entry.get(key)
+            if value in (None, ""):
+                continue
+            lines.append(f"{label}: {untappd.format_float(value)}")
+
+        comment = untappd.normalize_text(entry.get("comment"))
+        if comment:
+            lines.extend(["", "Comment:", comment])
+
+        previous_dates = [
+            untappd.normalize_text(candidate.get("created_at"))
+            for candidate in self.entries
+            if self.beer_key(candidate) == self.beer_key(entry)
+        ]
+        if len(previous_dates) > 1:
+            lines.extend(
                 [
-                    "--limit",
-                    str(self.search_limit.value()),
-                    "--sort",
-                    self.search_sort.currentText(),
+                    "",
+                    "Had dates:",
+                    *sorted(previous_dates, reverse=True),
                 ]
             )
-        elif action == "show":
-            identifier = self.show_identifier.text().strip()
-            if not identifier:
-                QMessageBox.warning(
-                    self,
-                    "Missing identifier",
-                    "Enter a search-result number or check-in id.",
-                )
-                return
-            args.append(identifier)
 
-        self.start_module(args)
+        self.detail_text.setPlainText("\n".join(lines))
+
+    def photo_url(self, entry: dict) -> str:
+        return untappd.normalize_text(entry.get("photo_url"))
+
+    def update_photo(self, entry: dict) -> None:
+        url = self.photo_url(entry)
+        if not url:
+            self.photo_label.set_photo(None)
+            return
+        if url in self.photo_cache:
+            self.photo_label.set_photo(self.photo_cache[url])
+            return
+        self.photo_label.set_photo(None, "Loading photo...")
+        if url in self.pending_photo_urls:
+            return
+
+        self.pending_photo_urls.add(url)
+        request = QNetworkRequest(QUrl(url))
+        reply = self.network_manager.get(request)
+        reply.setProperty("photo_url", url)
+
+    def photo_download_finished(self, reply: QNetworkReply) -> None:
+        url = str(reply.property("photo_url") or "")
+        if url:
+            self.pending_photo_urls.discard(url)
+
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            if (
+                self.selected_entry is not None
+                and self.photo_url(self.selected_entry) == url
+            ):
+                self.photo_label.set_photo(None, "Photo failed to load")
+            reply.deleteLater()
+            return
+
+        pixmap = pixmap_from_image_data(bytes(reply.readAll()))
+        if url and not pixmap.isNull():
+            self.photo_cache[url] = pixmap
+            if (
+                self.selected_entry is not None
+                and self.photo_url(self.selected_entry) == url
+            ):
+                self.photo_label.set_photo(pixmap)
+        elif (
+            self.selected_entry is not None
+            and self.photo_url(self.selected_entry) == url
+        ):
+            self.photo_label.set_photo(None, "Photo failed to load")
+
+        reply.deleteLater()
 
 
 RUNKEEPER_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 1
