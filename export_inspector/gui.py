@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QProcess,
     QProcessEnvironment,
+    QSettings,
     QSortFilterProxyModel,
     Qt,
     QUrl,
@@ -52,6 +53,8 @@ import show_messenger_chat
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TIMEZONE = "Europe/Stockholm"
+SETTINGS_ORG = "jk"
+SETTINGS_APP = "export_inspector"
 
 
 def split_terms(value: str) -> list[str]:
@@ -79,6 +82,33 @@ def line_edit(placeholder: str = "", text: str = "") -> QLineEdit:
     if text:
         widget.setText(text)
     return widget
+
+
+def app_settings() -> QSettings:
+    return QSettings(SETTINGS_ORG, SETTINGS_APP)
+
+
+def settings_text(key: str, default: str = "") -> str:
+    value = app_settings().value(key, default)
+    return str(value) if value is not None else default
+
+
+def remember_text(key: str, value: str) -> None:
+    text = value.strip()
+    if text:
+        app_settings().setValue(key, text)
+
+
+def dialog_start_path(key: str, fallback: str = "") -> str:
+    saved = settings_text(key, fallback).strip()
+    if not saved:
+        return ""
+    path = Path(saved).expanduser()
+    if path.is_dir():
+        return str(path)
+    if path.parent.exists():
+        return str(path.parent)
+    return fallback
 
 
 def create_date_controls() -> tuple[QCheckBox, QDateEdit]:
@@ -245,6 +275,7 @@ class MessengerTab(QWidget):
         self.available_threads: list[tuple[tuple[str, ...], list[str]]] = []
 
         self.path_edit = line_edit("JSON file or folder with message_*.json files")
+        self.path_edit.setText(settings_text("messenger/input_path"))
         self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
         self.filter_edit = line_edit(
             "Live filter: sender, text, attachment ref, reaction…"
@@ -322,15 +353,24 @@ class MessengerTab(QWidget):
 
     def pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Messenger JSON", "", "JSON Files (*.json)"
+            self,
+            "Select Messenger JSON",
+            dialog_start_path("messenger/input_path"),
+            "JSON Files (*.json)",
         )
         if path:
             self.path_edit.setText(path)
+            remember_text("messenger/input_path", path)
 
     def pick_directory(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Messenger Folder")
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Messenger Folder",
+            dialog_start_path("messenger/input_path"),
+        )
         if path:
             self.path_edit.setText(path)
+            remember_text("messenger/input_path", path)
 
     def load_chat(self) -> None:
         raw_path = self.path_edit.text().strip()
@@ -341,6 +381,9 @@ class MessengerTab(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
+
+        if raw_path:
+            remember_text("messenger/input_path", raw_path)
 
         self.thread_list.clear()
         self.thread_signatures = []
@@ -589,6 +632,7 @@ class GoogleMailTab(ProcessTab):
     def __init__(self) -> None:
         super().__init__("google_mail")
         self.path_edit = line_edit("Mailbox .mbox or SQLite index")
+        self.path_edit.setText(settings_text("google_mail/input_path"))
         browse_input = QPushButton("Browse")
         browse_input.clicked.connect(self.pick_input)
 
@@ -620,7 +664,9 @@ class GoogleMailTab(ProcessTab):
         self.show_index.setRange(1, 50_000_000)
         self.show_index.setValue(1)
 
-        self.index_output = line_edit(text="gmail_index.sqlite")
+        self.index_output = line_edit(
+            text=settings_text("google_mail/index_output", "gmail_index.sqlite")
+        )
         self.index_max_body = QSpinBox()
         self.index_max_body.setRange(1000, 1_000_000)
         self.index_max_body.setValue(50_000)
@@ -700,18 +746,23 @@ class GoogleMailTab(ProcessTab):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select mailbox or index",
-            "",
+            dialog_start_path("google_mail/input_path"),
             "Mailbox files (*.mbox *.sqlite *.db *.sqlite3);;All files (*)",
         )
         if path:
             self.path_edit.setText(path)
+            remember_text("google_mail/input_path", path)
 
     def pick_index_output(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save SQLite index", self.index_output.text(), "SQLite (*.sqlite)"
+            self,
+            "Save SQLite index",
+            dialog_start_path("google_mail/index_output", self.index_output.text()),
+            "SQLite (*.sqlite)",
         )
         if path:
             self.index_output.setText(path)
+            remember_text("google_mail/index_output", path)
 
     def run_current(self) -> None:
         input_path = self.path_edit.text().strip()
@@ -720,6 +771,8 @@ class GoogleMailTab(ProcessTab):
                 self, "Missing input", "Select an .mbox or .sqlite file first."
             )
             return
+
+        remember_text("google_mail/input_path", input_path)
 
         action = self.action_combo.currentText()
         args = [action, input_path]
@@ -765,7 +818,9 @@ class GoogleMailTab(ProcessTab):
                 ]
             )
         elif action == "index":
-            args.append(self.index_output.text().strip() or "gmail_index.sqlite")
+            output_path = self.index_output.text().strip() or "gmail_index.sqlite"
+            remember_text("google_mail/index_output", output_path)
+            args.append(output_path)
             args.extend(
                 ["--max-body-chars", str(self.index_max_body.value()), "--no-progress"]
             )
@@ -779,6 +834,7 @@ class UntappdTab(ProcessTab):
     def __init__(self) -> None:
         super().__init__("untappd")
         self.path_edit = line_edit("Untappd export JSON")
+        self.path_edit.setText(settings_text("untappd/input_path"))
         browse_input = QPushButton("Browse")
         browse_input.clicked.connect(self.pick_input)
 
@@ -887,10 +943,14 @@ class UntappdTab(ProcessTab):
 
     def pick_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Untappd JSON", "", "JSON Files (*.json)"
+            self,
+            "Select Untappd JSON",
+            dialog_start_path("untappd/input_path"),
+            "JSON Files (*.json)",
         )
         if path:
             self.path_edit.setText(path)
+            remember_text("untappd/input_path", path)
 
     def run_current(self) -> None:
         input_path = self.path_edit.text().strip()
@@ -899,6 +959,8 @@ class UntappdTab(ProcessTab):
                 self, "Missing input", "Select an Untappd export JSON file first."
             )
             return
+
+        remember_text("untappd/input_path", input_path)
 
         action = self.action_combo.currentText()
         args = [action, input_path]
@@ -1007,6 +1069,7 @@ class RunkeeperTab(QWidget):
         self.selected_activity: runkeeper.Activity | None = None
 
         self.path_edit = line_edit("Runkeeper ZIP export or folder of ZIPs")
+        self.path_edit.setText(settings_text("runkeeper/input_path"))
         browse_file = QPushButton("Browse ZIP")
         browse_file.clicked.connect(self.pick_input_file)
         browse_directory = QPushButton("Browse Folder")
@@ -1087,15 +1150,24 @@ class RunkeeperTab(QWidget):
 
     def pick_input_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Runkeeper ZIP", "", "ZIP Files (*.zip)"
+            self,
+            "Select Runkeeper ZIP",
+            dialog_start_path("runkeeper/input_path"),
+            "ZIP Files (*.zip)",
         )
         if path:
             self.path_edit.setText(path)
+            remember_text("runkeeper/input_path", path)
 
     def pick_input_directory(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Runkeeper ZIP folder")
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Runkeeper ZIP folder",
+            dialog_start_path("runkeeper/input_path"),
+        )
         if path:
             self.path_edit.setText(path)
+            remember_text("runkeeper/input_path", path)
 
     def load_export(self) -> None:
         input_path = self.path_edit.text().strip()
@@ -1112,6 +1184,8 @@ class RunkeeperTab(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
+
+        remember_text("runkeeper/input_path", input_path)
 
         self.route_points_cache.clear()
         if self.map_view is not None:
