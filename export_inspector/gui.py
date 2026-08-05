@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -98,7 +99,9 @@ class MessengerTab(QWidget):
         super().__init__()
         self.messages: list[dict] = []
         self.participants: list[str] = []
-        self.paths: list[Path] = []
+        self.paths: list[str] = []
+        self.thread_signatures: list[tuple[str, ...]] = []
+        self.available_threads: list[tuple[tuple[str, ...], list[str]]] = []
 
         self.path_edit = line_edit("JSON file or folder with message_*.json files")
         self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
@@ -112,11 +115,13 @@ class MessengerTab(QWidget):
         self.show_latest.toggled.connect(self.refresh_messages)
         self.render_limit = QSpinBox()
         self.render_limit.setRange(50, 100000)
-        self.render_limit.setValue(5000)
+        self.render_limit.setValue(100000)
         self.render_limit.valueChanged.connect(self.refresh_messages)
         self.status_label = QLabel("No chat loaded.")
         self.info_label = QLabel("")
         self.info_label.setWordWrap(True)
+        self.thread_list = QListWidget()
+        self.thread_list.currentRowChanged.connect(self.select_thread)
         self.viewer = QPlainTextEdit()
         self.viewer.setReadOnly(True)
         self.viewer.setLineWrapMode(QPlainTextEdit.WidgetWidth)
@@ -162,6 +167,11 @@ class MessengerTab(QWidget):
         summary_layout.addWidget(self.info_label)
         root.addWidget(summary_box)
 
+        thread_box = QGroupBox("Chats")
+        thread_layout = QVBoxLayout(thread_box)
+        thread_layout.addWidget(self.thread_list)
+        root.addWidget(thread_box)
+
         messages_box = QGroupBox("Messages")
         messages_layout = QVBoxLayout(messages_box)
         messages_layout.addWidget(self.viewer)
@@ -182,7 +192,45 @@ class MessengerTab(QWidget):
         input_path: str | None = raw_path or None
 
         try:
-            self.messages, self.participants, self.paths = show_messenger_chat.load_exports(input_path)
+            self.available_threads = show_messenger_chat.discover_threads(input_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return
+
+        self.thread_list.clear()
+        self.thread_signatures = []
+
+        if not self.available_threads:
+            self.messages = []
+            self.participants = []
+            self.paths = []
+            self.viewer.clear()
+            self.status_label.setText("No chats found.")
+            self.info_label.setText("")
+            return
+
+        for signature, sources in self.available_threads:
+            self.thread_signatures.append(signature)
+            self.thread_list.addItem(
+                f"{show_messenger_chat.signature_label(signature)}  ({len(sources)} source{'s' if len(sources) != 1 else ''})"
+            )
+
+        self.status_label.setText(f"Found {len(self.available_threads)} chats.")
+        self.thread_list.setCurrentRow(0)
+
+    def select_thread(self, row: int) -> None:
+        if row < 0 or row >= len(self.thread_signatures):
+            return
+
+        raw_path = self.path_edit.text().strip()
+        input_path: str | None = raw_path or None
+        signature = self.thread_signatures[row]
+
+        try:
+            self.messages, self.participants, self.paths = show_messenger_chat.load_exports(
+                input_path,
+                target_signature=signature,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
@@ -225,7 +273,10 @@ class MessengerTab(QWidget):
     def refresh_messages(self) -> None:
         if not self.messages:
             self.viewer.clear()
-            self.status_label.setText("No chat loaded.")
+            if self.thread_signatures:
+                self.status_label.setText("Selected chat has no messages.")
+            else:
+                self.status_label.setText("No chat loaded.")
             return
 
         timezone_name = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
@@ -707,9 +758,11 @@ class UntappdTab(ProcessTab):
 class RunkeeperTab(ProcessTab):
     def __init__(self) -> None:
         super().__init__("runkeeper")
-        self.path_edit = line_edit("Runkeeper ZIP export")
-        browse_input = QPushButton("Browse")
-        browse_input.clicked.connect(self.pick_input)
+        self.path_edit = line_edit("Runkeeper ZIP export or folder of ZIPs")
+        browse_file = QPushButton("Browse ZIP")
+        browse_file.clicked.connect(self.pick_input_file)
+        browse_directory = QPushButton("Browse Folder")
+        browse_directory.clicked.connect(self.pick_input_directory)
 
         self.action_combo = QComboBox()
         self.action_combo.addItems(["info", "search", "show", "map"])
@@ -764,7 +817,8 @@ class RunkeeperTab(ProcessTab):
         source_layout = QGridLayout(source_box)
         source_layout.addWidget(QLabel("Path"), 0, 0)
         source_layout.addWidget(self.path_edit, 0, 1, 1, 2)
-        source_layout.addWidget(browse_input, 0, 3)
+        source_layout.addWidget(browse_file, 0, 3)
+        source_layout.addWidget(browse_directory, 0, 4)
         controls.addWidget(source_box)
 
         action_box = QGroupBox("Action")
@@ -827,8 +881,13 @@ class RunkeeperTab(ProcessTab):
         layout.addRow("", self.map_open)
         return page
 
-    def pick_input(self) -> None:
+    def pick_input_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select Runkeeper ZIP", "", "ZIP Files (*.zip)")
+        if path:
+            self.path_edit.setText(path)
+
+    def pick_input_directory(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select Runkeeper ZIP folder")
         if path:
             self.path_edit.setText(path)
 
@@ -840,7 +899,7 @@ class RunkeeperTab(ProcessTab):
     def run_current(self) -> None:
         input_path = self.path_edit.text().strip()
         if not input_path:
-            QMessageBox.warning(self, "Missing input", "Select a Runkeeper ZIP file first.")
+            QMessageBox.warning(self, "Missing input", "Select a Runkeeper ZIP file or folder first.")
             return
 
         action = self.action_combo.currentText()

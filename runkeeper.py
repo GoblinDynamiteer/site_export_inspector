@@ -14,7 +14,8 @@ import webbrowser
 import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
+from functools import partial
 from http.server import SimpleHTTPRequestHandler
 from io import StringIO
 from pathlib import Path
@@ -32,6 +33,7 @@ NS = {"gpx": "http://www.topografix.com/GPX/1/1"}
 @dataclass
 class Activity:
     index: int
+    archive_path: Path
     file_name: str
     name: str
     activity_type: str
@@ -53,26 +55,56 @@ def parse_args() -> argparse.Namespace:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    info_parser = subparsers.add_parser("info", help="Show summary stats for a Runkeeper ZIP export.")
-    info_parser.add_argument("input_file", help="Path to the Runkeeper export ZIP.")
-    info_parser.add_argument("--top", type=int, default=10, help="Top-N lists, default: 10.")
+    info_parser = subparsers.add_parser(
+        "info", help="Show summary stats for Runkeeper ZIP exports."
+    )
+    info_parser.add_argument(
+        "input_file", help="Path to a Runkeeper export ZIP or a directory of ZIPs."
+    )
+    info_parser.add_argument(
+        "--top", type=int, default=10, help="Top-N lists, default: 10."
+    )
     info_parser.add_argument(
         "--timezone",
         default="Europe/Stockholm",
         help="Timezone for displayed dates, default: Europe/Stockholm.",
     )
 
-    search_parser = subparsers.add_parser("search", help="Search activities in a Runkeeper ZIP export.")
-    search_parser.add_argument("input_file", help="Path to the Runkeeper export ZIP.")
-    search_parser.add_argument("terms", nargs="*", help="Search terms for activity name, type, or file name.")
-    search_parser.add_argument("--type", dest="type_filter", help="Filter by activity type.")
-    search_parser.add_argument("--after", help="Only include activities on or after YYYY-MM-DD.")
+    search_parser = subparsers.add_parser(
+        "search", help="Search activities in Runkeeper ZIP exports."
+    )
+    search_parser.add_argument(
+        "input_file", help="Path to a Runkeeper export ZIP or a directory of ZIPs."
+    )
+    search_parser.add_argument(
+        "terms", nargs="*", help="Search terms for activity name, type, or file name."
+    )
+    search_parser.add_argument(
+        "--type", dest="type_filter", help="Filter by activity type."
+    )
+    search_parser.add_argument(
+        "--after", help="Only include activities on or after YYYY-MM-DD."
+    )
     search_parser.add_argument("--from", dest="from_date", help="Alias for --after.")
-    search_parser.add_argument("--before", help="Only include activities before YYYY-MM-DD.")
-    search_parser.add_argument("--min-distance", type=float, help="Only include activities >= this many km.")
-    search_parser.add_argument("--max-distance", type=float, help="Only include activities <= this many km.")
-    search_parser.add_argument("--min-duration", type=float, help="Only include activities >= this many minutes.")
-    search_parser.add_argument("--max-duration", type=float, help="Only include activities <= this many minutes.")
+    search_parser.add_argument(
+        "--before", help="Only include activities before YYYY-MM-DD."
+    )
+    search_parser.add_argument(
+        "--min-distance", type=float, help="Only include activities >= this many km."
+    )
+    search_parser.add_argument(
+        "--max-distance", type=float, help="Only include activities <= this many km."
+    )
+    search_parser.add_argument(
+        "--min-duration",
+        type=float,
+        help="Only include activities >= this many minutes.",
+    )
+    search_parser.add_argument(
+        "--max-duration",
+        type=float,
+        help="Only include activities <= this many minutes.",
+    )
     search_parser.add_argument(
         "--sort",
         choices=[
@@ -89,9 +121,15 @@ def parse_args() -> argparse.Namespace:
         default="date-desc",
         help="Sort order for results, default: date-desc.",
     )
-    search_parser.add_argument("--any", action="store_true", help="Match any term instead of all terms.")
-    search_parser.add_argument("--limit", type=int, default=20, help="Maximum results, default: 20.")
-    search_parser.add_argument("--no-ansi", action="store_true", help="Disable ANSI highlights.")
+    search_parser.add_argument(
+        "--any", action="store_true", help="Match any term instead of all terms."
+    )
+    search_parser.add_argument(
+        "--limit", type=int, default=20, help="Maximum results, default: 20."
+    )
+    search_parser.add_argument(
+        "--no-ansi", action="store_true", help="Disable ANSI highlights."
+    )
     search_parser.add_argument(
         "--timezone",
         default="Europe/Stockholm",
@@ -99,7 +137,9 @@ def parse_args() -> argparse.Namespace:
     )
 
     show_parser = subparsers.add_parser("show", help="Show one activity in detail.")
-    show_parser.add_argument("input_file", help="Path to the Runkeeper export ZIP.")
+    show_parser.add_argument(
+        "input_file", help="Path to a Runkeeper export ZIP or a directory of ZIPs."
+    )
     show_parser.add_argument(
         "identifier",
         help="Activity file name like 2026-04-22-072752.gpx, or the numeric activity index.",
@@ -110,8 +150,12 @@ def parse_args() -> argparse.Namespace:
         help="Timezone for displayed dates, default: Europe/Stockholm.",
     )
 
-    map_parser = subparsers.add_parser("map", help="Generate an HTML map for one activity.")
-    map_parser.add_argument("input_file", help="Path to the Runkeeper export ZIP.")
+    map_parser = subparsers.add_parser(
+        "map", help="Generate an HTML map for one activity."
+    )
+    map_parser.add_argument(
+        "input_file", help="Path to a Runkeeper export ZIP or a directory of ZIPs."
+    )
     map_parser.add_argument(
         "identifier",
         help="Activity file name like 2026-04-22-072752.gpx, or the numeric activity index.",
@@ -150,7 +194,9 @@ def parse_date_filter(value: str | None, timezone_name: str) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=ZoneInfo(timezone_name))
+        return datetime.strptime(value, "%Y-%m-%d").replace(
+            tzinfo=ZoneInfo(timezone_name)
+        )
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             f"Invalid date '{value}'. Expected format: YYYY-MM-DD."
@@ -237,7 +283,11 @@ def highlight_text(text: str, terms: list[str], ansi_enabled: bool) -> str:
 
 def parse_type_from_name(name: str) -> str:
     trimmed = normalize_text(name)
-    match = re.match(r"^(.*?)\s+\d{1,2}/\d{1,2}/\d{2}\s+\d{1,2}:\d{2}\s+[ap]m$", trimmed, re.IGNORECASE)
+    match = re.match(
+        r"^(.*?)\s+\d{1,2}/\d{1,2}/\d{2}\s+\d{1,2}:\d{2}\s+[ap]m$",
+        trimmed,
+        re.IGNORECASE,
+    )
     if match:
         candidate = normalize_text(match.group(1))
         if candidate:
@@ -265,9 +315,14 @@ def parse_gpx_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
-def parse_activity(index: int, file_name: str, xml_bytes: bytes) -> Activity:
+def parse_activity(
+    index: int, archive_path: Path, file_name: str, xml_bytes: bytes
+) -> Activity:
     root = ET.fromstring(xml_bytes)
-    name = normalize_text(root.findtext(".//gpx:trk/gpx:name", default="", namespaces=NS)) or file_name
+    name = (
+        normalize_text(root.findtext(".//gpx:trk/gpx:name", default="", namespaces=NS))
+        or file_name
+    )
 
     points: list[tuple[float, float, float | None, datetime | None]] = []
     for point in root.findall(".//gpx:trkpt", NS):
@@ -282,7 +337,9 @@ def parse_activity(index: int, file_name: str, xml_bytes: bytes) -> Activity:
     started_at = next((dt for _, _, _, dt in points if dt is not None), None)
     finished_at = next((dt for _, _, _, dt in reversed(points) if dt is not None), None)
     if started_at is None or finished_at is None:
-        track_time = normalize_text(root.findtext(".//gpx:trk/gpx:time", default="", namespaces=NS))
+        track_time = normalize_text(
+            root.findtext(".//gpx:trk/gpx:time", default="", namespaces=NS)
+        )
         if not track_time:
             raise ValueError(f"Could not find timestamps in {file_name}")
         started_at = finished_at = parse_gpx_datetime(track_time)
@@ -293,7 +350,11 @@ def parse_activity(index: int, file_name: str, xml_bytes: bytes) -> Activity:
         distance_km += haversine_km(previous[0], previous[1], current[0], current[1])
         previous_ele = previous[2]
         current_ele = current[2]
-        if previous_ele is not None and current_ele is not None and current_ele > previous_ele:
+        if (
+            previous_ele is not None
+            and current_ele is not None
+            and current_ele > previous_ele
+        ):
             elevation_gain_m += current_ele - previous_ele
 
     start_lat = points[0][0] if points else None
@@ -303,6 +364,7 @@ def parse_activity(index: int, file_name: str, xml_bytes: bytes) -> Activity:
 
     return Activity(
         index=index,
+        archive_path=archive_path,
         file_name=file_name,
         name=name,
         activity_type=parse_type_from_name(name),
@@ -328,21 +390,43 @@ def parse_csv_rows(zip_file: zipfile.ZipFile, member_name: str) -> list[dict[str
     return [dict(row) for row in reader]
 
 
-def load_export(path: Path) -> tuple[list[Activity], list[dict[str, str]], list[dict[str, str]]]:
+def discover_zip_paths(path: Path) -> list[Path]:
     if not path.exists():
-        raise SystemExit(f"File not found: {path}")
+        raise SystemExit(f"Path not found: {path}")
+    if path.is_dir():
+        zip_paths = sorted(item for item in path.rglob("*.zip") if item.is_file())
+        if not zip_paths:
+            raise SystemExit(f"No ZIP files found in directory: {path}")
+        return zip_paths
     if path.suffix.lower() != ".zip":
-        raise SystemExit("Expected a Runkeeper ZIP export.")
+        raise SystemExit("Expected a Runkeeper ZIP export or a directory of ZIP files.")
+    return [path]
+
+
+def load_export(
+    path: Path,
+) -> tuple[list[Activity], list[dict[str, str]], list[dict[str, str]]]:
+    zip_paths = discover_zip_paths(path)
 
     activities: list[Activity] = []
-    with zipfile.ZipFile(path) as zip_file:
-        gpx_files = sorted(
-            name for name in zip_file.namelist() if name.lower().endswith(".gpx")
-        )
-        for index, member_name in enumerate(gpx_files, start=1):
-            activities.append(parse_activity(index, member_name, zip_file.read(member_name)))
-        measurements = parse_csv_rows(zip_file, "measurements.csv")
-        photos = parse_csv_rows(zip_file, "photos.csv")
+    measurements: list[dict[str, str]] = []
+    photos: list[dict[str, str]] = []
+    for zip_path in zip_paths:
+        with zipfile.ZipFile(zip_path) as zip_file:
+            gpx_files = sorted(
+                name for name in zip_file.namelist() if name.lower().endswith(".gpx")
+            )
+            for member_name in gpx_files:
+                activities.append(
+                    parse_activity(
+                        len(activities) + 1,
+                        zip_path,
+                        member_name,
+                        zip_file.read(member_name),
+                    )
+                )
+            measurements.extend(parse_csv_rows(zip_file, "measurements.csv"))
+            photos.extend(parse_csv_rows(zip_file, "photos.csv"))
 
     activities.sort(key=lambda item: item.started_at)
     for index, activity in enumerate(activities, start=1):
@@ -357,11 +441,17 @@ def sort_activities(activities: Iterable[Activity], sort_key: str) -> list[Activ
     if sort_key == "date-desc":
         return sorted(items, key=lambda item: item.started_at, reverse=True)
     if sort_key == "distance-desc":
-        return sorted(items, key=lambda item: (item.distance_km, item.started_at), reverse=True)
+        return sorted(
+            items, key=lambda item: (item.distance_km, item.started_at), reverse=True
+        )
     if sort_key == "distance-asc":
         return sorted(items, key=lambda item: (item.distance_km, item.started_at))
     if sort_key == "duration-desc":
-        return sorted(items, key=lambda item: (item.duration_seconds, item.started_at), reverse=True)
+        return sorted(
+            items,
+            key=lambda item: (item.duration_seconds, item.started_at),
+            reverse=True,
+        )
     if sort_key == "duration-asc":
         return sorted(items, key=lambda item: (item.duration_seconds, item.started_at))
     if sort_key == "pace-asc":
@@ -369,7 +459,11 @@ def sort_activities(activities: Iterable[Activity], sort_key: str) -> list[Activ
     if sort_key == "pace-desc":
         return sorted(items, key=lambda item: pace_sort_value(item), reverse=True)
     if sort_key == "elevation-desc":
-        return sorted(items, key=lambda item: (item.elevation_gain_m, item.started_at), reverse=True)
+        return sorted(
+            items,
+            key=lambda item: (item.elevation_gain_m, item.started_at),
+            reverse=True,
+        )
     raise ValueError(f"Unsupported sort key: {sort_key}")
 
 
@@ -380,7 +474,10 @@ def pace_sort_value(activity: Activity) -> float:
 
 
 def activity_matches(activity: Activity, args: argparse.Namespace) -> bool:
-    if args.type_filter and args.type_filter.lower() not in activity.activity_type.lower():
+    if (
+        args.type_filter
+        and args.type_filter.lower() not in activity.activity_type.lower()
+    ):
         return False
 
     after_dt = parse_date_filter(args.from_date or args.after, args.timezone)
@@ -395,9 +492,15 @@ def activity_matches(activity: Activity, args: argparse.Namespace) -> bool:
         return False
     if args.max_distance is not None and activity.distance_km > args.max_distance:
         return False
-    if args.min_duration is not None and activity.duration_seconds < args.min_duration * 60:
+    if (
+        args.min_duration is not None
+        and activity.duration_seconds < args.min_duration * 60
+    ):
         return False
-    if args.max_duration is not None and activity.duration_seconds > args.max_duration * 60:
+    if (
+        args.max_duration is not None
+        and activity.duration_seconds > args.max_duration * 60
+    ):
         return False
 
     terms = [term.lower() for term in args.terms]
@@ -424,7 +527,9 @@ def print_counter(title: str, counter: Counter[str], limit: int) -> None:
     print()
 
 
-def print_activity_leaderboard(title: str, activities: list[Activity], timezone_name: str, limit: int) -> None:
+def print_activity_leaderboard(
+    title: str, activities: list[Activity], timezone_name: str, limit: int
+) -> None:
     print(f"{title} ({min(limit, len(activities))}):")
     for activity in activities[:limit]:
         print(
@@ -447,7 +552,9 @@ def run_info(args: argparse.Namespace) -> None:
     timezone_name = args.timezone
 
     print(f"Activities: {len(activities)}")
-    print(f"Date range: {format_dt(activities[0].started_at, timezone_name)} to {format_dt(activities[-1].started_at, timezone_name)}")
+    print(
+        f"Date range: {format_dt(activities[0].started_at, timezone_name)} to {format_dt(activities[-1].started_at, timezone_name)}"
+    )
     print(f"Total distance: {total_distance:.2f} km")
     print(f"Total duration: {format_duration(total_duration)}")
     print(f"Total elevation gain: {total_elevation:.0f} m")
@@ -459,9 +566,17 @@ def run_info(args: argparse.Namespace) -> None:
     print()
 
     type_counter = Counter(activity.activity_type for activity in activities)
-    year_counter = Counter(str(activity.started_at.astimezone(ZoneInfo(timezone_name)).year) for activity in activities)
-    weekday_counter = Counter(activity.started_at.astimezone(ZoneInfo(timezone_name)).strftime("%A") for activity in activities)
-    measurement_counter = Counter(normalize_text(row.get("Type")) or "(unknown)" for row in measurements)
+    year_counter = Counter(
+        str(activity.started_at.astimezone(ZoneInfo(timezone_name)).year)
+        for activity in activities
+    )
+    weekday_counter = Counter(
+        activity.started_at.astimezone(ZoneInfo(timezone_name)).strftime("%A")
+        for activity in activities
+    )
+    measurement_counter = Counter(
+        normalize_text(row.get("Type")) or "(unknown)" for row in measurements
+    )
 
     distance_by_type = defaultdict(float)
     duration_by_type = defaultdict(float)
@@ -475,7 +590,9 @@ def run_info(args: argparse.Namespace) -> None:
     print_counter("Measurement types", measurement_counter, args.top)
 
     print(f"Distance by type ({min(args.top, len(distance_by_type))}):")
-    for activity_type, distance_km in sorted(distance_by_type.items(), key=lambda item: item[1], reverse=True)[: args.top]:
+    for activity_type, distance_km in sorted(
+        distance_by_type.items(), key=lambda item: item[1], reverse=True
+    )[: args.top]:
         print(
             f"{distance_km:8.2f} km  {activity_type}  "
             f"avg pace={format_pace(distance_km, duration_by_type[activity_type])}"
@@ -495,7 +612,11 @@ def run_info(args: argparse.Namespace) -> None:
         args.top,
     )
 
-    fastest = [activity for activity in activities if activity.distance_km >= 1 and activity.duration_seconds > 0]
+    fastest = [
+        activity
+        for activity in activities
+        if activity.distance_km >= 1 and activity.duration_seconds > 0
+    ]
     fastest = sorted(fastest, key=pace_sort_value)
     print(f"Fastest activities ({min(args.top, len(fastest))}):")
     for activity in fastest[: args.top]:
@@ -533,7 +654,9 @@ def run_search(args: argparse.Namespace) -> None:
         print(f"   Type: {highlight_text(activity.activity_type, terms, ansi_enabled)}")
         print(f"   Distance: {activity.distance_km:.2f} km")
         print(f"   Duration: {format_duration(activity.duration_seconds)}")
-        print(f"   Pace: {format_pace(activity.distance_km, activity.duration_seconds)}")
+        print(
+            f"   Pace: {format_pace(activity.distance_km, activity.duration_seconds)}"
+        )
         print(f"   Elevation gain: {activity.elevation_gain_m:.0f} m")
         print(f"   File: {highlight_text(activity.file_name, terms, ansi_enabled)}")
         print(f"   Match: {highlight_text(shorten(snippet), terms, ansi_enabled)}")
@@ -550,7 +673,10 @@ def resolve_activity(activities: list[Activity], identifier: str) -> Activity:
 
     normalized = identifier.strip()
     for activity in activities:
-        if activity.file_name == normalized or Path(activity.file_name).name == normalized:
+        if (
+            activity.file_name == normalized
+            or Path(activity.file_name).name == normalized
+        ):
             return activity
     raise SystemExit(f"No activity found for identifier: {identifier}")
 
@@ -566,7 +692,9 @@ def color_for_activity(activity_type: str) -> str:
     return "#264653"
 
 
-def load_route_points(zip_path: Path, member_name: str) -> list[dict[str, float | str | None]]:
+def load_route_points(
+    zip_path: Path, member_name: str
+) -> list[dict[str, float | str | None]]:
     with zipfile.ZipFile(zip_path) as zip_file:
         root = ET.fromstring(zip_file.read(member_name))
 
@@ -617,7 +745,7 @@ def build_map_html(
         ("File", file_name),
     ]
     stats_html = "\n".join(
-        f"<div class=\"stat\"><span class=\"label\">{html.escape(label)}</span><span class=\"value\">{html.escape(value)}</span></div>"
+        f'<div class="stat"><span class="label">{html.escape(label)}</span><span class="value">{html.escape(value)}</span></div>'
         for label, value in summary_rows
     )
 
@@ -864,8 +992,10 @@ class QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
-def serve_directory(directory: Path, file_name: str, port: int, open_browser: bool) -> None:
-    handler = lambda *args, **kwargs: QuietHandler(*args, directory=str(directory), **kwargs)
+def serve_directory(
+    directory: Path, file_name: str, port: int, open_browser: bool
+) -> None:
+    handler = partial(QuietHandler, directory=str(directory))
     with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
         url = f"http://127.0.0.1:{port}/{file_name}"
         print(url)
@@ -897,25 +1027,34 @@ def run_show(args: argparse.Namespace) -> None:
         print(f"Start: {activity.start_lat:.6f}, {activity.start_lon:.6f}")
     if activity.end_lat is not None and activity.end_lon is not None:
         print(f"End: {activity.end_lat:.6f}, {activity.end_lon:.6f}")
-    print(f"Photo entries elsewhere in archive: {len(photos)}")
+    print(f"Photo entries in loaded export data: {len(photos)}")
     if photos:
-        print("Photo note: photos.csv uses activity UUIDs that are not exposed in the GPX file names.")
+        print(
+            "Photo note: photos.csv uses activity UUIDs that are not exposed in the GPX file names."
+        )
 
 
 def run_map(args: argparse.Namespace) -> None:
-    zip_path = Path(args.input_file)
-    activities, _, _ = load_export(zip_path)
+    activities, _, _ = load_export(Path(args.input_file))
     activity = resolve_activity(activities, args.identifier)
-    points = load_route_points(zip_path, activity.file_name)
+    points = load_route_points(activity.archive_path, activity.file_name)
 
-    output_path = Path(args.output) if args.output else default_map_output_path(activity.file_name)
-    output_path.write_text(build_map_html(activity, points, args.timezone), encoding="utf-8")
+    output_path = (
+        Path(args.output)
+        if args.output
+        else default_map_output_path(activity.file_name)
+    )
+    output_path.write_text(
+        build_map_html(activity, points, args.timezone), encoding="utf-8"
+    )
     print(output_path)
 
     should_serve = args.serve or args.open
     if should_serve:
         print("Serving over local HTTP so map tiles load correctly.")
-        serve_directory(output_path.resolve().parent, output_path.name, args.port, args.open)
+        serve_directory(
+            output_path.resolve().parent, output_path.name, args.port, args.open
+        )
         return
 
     print("Open this over local HTTP if map tiles are blocked when using file://")
