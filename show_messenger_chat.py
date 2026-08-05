@@ -158,9 +158,8 @@ def load_json_thread(path: Path) -> tuple[list[dict], tuple[str, ...]]:
 def load_zip_thread_members(
     path: Path,
     target_signatures: set[tuple[str, ...]],
-) -> tuple[list[tuple[str, list[dict]]], set[tuple[str, ...]]]:
-    matched_threads: list[tuple[str, list[dict]]] = []
-    seen_signatures: set[tuple[str, ...]] = set()
+) -> list[tuple[str, tuple[str, ...], list[dict]]]:
+    matched_threads: list[tuple[str, tuple[str, ...], list[dict]]] = []
 
     with zipfile.ZipFile(path) as archive:
         for member_name in sorted(archive.namelist()):
@@ -175,15 +174,15 @@ def load_zip_thread_members(
             signature = participant_signature_from_data(data)
             if target_signatures and signature not in target_signatures:
                 continue
-            seen_signatures.add(signature)
             matched_threads.append(
                 (
                     member_name,
+                    signature,
                     [normalize_message(message) for message in data.get("messages", [])],
                 )
             )
 
-    return matched_threads, seen_signatures
+    return matched_threads
 
 
 def discover_folder_sources(folder: Path) -> tuple[list[Path], list[Path], set[tuple[str, ...]]]:
@@ -200,6 +199,52 @@ def discover_folder_sources(folder: Path) -> tuple[list[Path], list[Path], set[t
             target_signatures.add(signature)
 
     return json_paths, zip_paths, target_signatures
+
+
+def signature_label(signature: tuple[str, ...]) -> str:
+    if not signature:
+        return "(unknown participants)"
+    return " / ".join(signature)
+
+
+def discover_threads(input_path: str | None) -> list[tuple[tuple[str, ...], list[str]]]:
+    thread_sources: dict[tuple[str, ...], list[str]] = {}
+
+    def add_thread(signature: tuple[str, ...], source_label: str) -> None:
+        if not signature:
+            return
+        thread_sources.setdefault(signature, []).append(source_label)
+
+    if input_path:
+        selected_path = Path(input_path)
+        if selected_path.is_dir():
+            json_paths, zip_paths, _target_signatures = discover_folder_sources(selected_path)
+            for path in json_paths:
+                try:
+                    _messages, signature = load_json_thread(path)
+                except Exception:
+                    continue
+                add_thread(signature, str(path))
+
+            for path in zip_paths:
+                for member_name, signature, _messages in load_zip_thread_members(path, set()):
+                    add_thread(signature, f"{path}!{member_name}")
+        elif selected_path.suffix.lower() == ".zip":
+            for member_name, signature, _messages in load_zip_thread_members(selected_path, set()):
+                add_thread(signature, f"{selected_path}!{member_name}")
+        else:
+            messages, signature = load_json_thread(selected_path)
+            if messages:
+                add_thread(signature, str(selected_path))
+    else:
+        for path in sorted(Path.cwd().glob("message_*.json")):
+            try:
+                _messages, signature = load_json_thread(path)
+            except Exception:
+                continue
+            add_thread(signature, str(path))
+
+    return sorted(thread_sources.items(), key=lambda item: signature_label(item[0]).lower())
 
 
 def repair_text(value: str | None) -> str:
@@ -513,7 +558,10 @@ def render_message(
     return lines
 
 
-def load_exports(input_path: str | None) -> tuple[list[dict], list[str], list[str]]:
+def load_exports(
+    input_path: str | None,
+    target_signature: tuple[str, ...] | None = None,
+) -> tuple[list[dict], list[str], list[str]]:
     all_messages: list[dict] = []
     participants: set[str] = set()
     source_labels: list[str] = []
@@ -522,37 +570,44 @@ def load_exports(input_path: str | None) -> tuple[list[dict], list[str], list[st
         selected_path = Path(input_path)
         if selected_path.is_dir():
             json_paths, zip_paths, target_signatures = discover_folder_sources(selected_path)
+            if target_signature is not None:
+                target_signatures = {target_signature}
             for path in json_paths:
                 messages, signature = load_json_thread(path)
+                if target_signature is not None and signature != target_signature:
+                    continue
                 all_messages.extend(messages)
                 participants.update(signature)
                 source_labels.append(str(path))
 
             for path in zip_paths:
-                matched_threads, matched_signatures = load_zip_thread_members(path, target_signatures)
-                for member_name, messages in matched_threads:
+                matched_threads = load_zip_thread_members(path, target_signatures)
+                for member_name, signature, messages in matched_threads:
                     all_messages.extend(messages)
-                    participants.update(
-                        name for signature in matched_signatures for name in signature
-                    )
+                    participants.update(signature)
                     source_labels.append(f"{path}!{member_name}")
         elif selected_path.suffix.lower() == ".zip":
-            matched_threads, matched_signatures = load_zip_thread_members(selected_path, set())
-            for member_name, messages in matched_threads:
+            zip_targets = {target_signature} if target_signature is not None else set()
+            matched_threads = load_zip_thread_members(selected_path, zip_targets)
+            for member_name, signature, messages in matched_threads:
                 all_messages.extend(messages)
-                participants.update(
-                    name for signature in matched_signatures for name in signature
-                )
+                participants.update(signature)
                 source_labels.append(f"{selected_path}!{member_name}")
         else:
             messages, signature = load_json_thread(selected_path)
+            if target_signature is not None and signature != target_signature:
+                messages = []
+                signature = ()
             all_messages.extend(messages)
             participants.update(signature)
-            source_labels.append(str(selected_path))
+            if messages:
+                source_labels.append(str(selected_path))
     else:
         json_paths = sorted(Path.cwd().glob("message_*.json"))
         for path in json_paths:
             messages, signature = load_json_thread(path)
+            if target_signature is not None and signature != target_signature:
+                continue
             all_messages.extend(messages)
             participants.update(signature)
             source_labels.append(str(path))
