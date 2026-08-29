@@ -14,18 +14,10 @@ dependencies = [
 
 [project.scripts]
 export-inspector = "export_inspector.gui:main"
-messenger-chat = "show_messenger_chat:main"
-google-mail = "google_mail:main"
-untappd-export = "untappd:main"
-runkeeper-export = "runkeeper:main"
-
-[tool.setuptools]
-py-modules = [
-  "google_mail",
-  "runkeeper",
-  "show_messenger_chat",
-  "untappd",
-]
+messenger-chat = "export_inspector.messenger_chat:main"
+google-mail = "export_inspector.google_mail:main"
+untappd-export = "export_inspector.untappd:main"
+runkeeper-export = "export_inspector.runkeeper:main"
 
 [tool.setuptools.packages.find]
 include = ["export_inspector*"]

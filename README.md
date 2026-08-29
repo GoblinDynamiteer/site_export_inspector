@@ -23,7 +23,7 @@ Clone the repo and run commands from the project directory:
 ```bash
 git clone https://github.com/GoblinDynamiteer/site_export_inspector.git
 cd site_export_inspector
-uv run python untappd.py --help
+uv run untappd-export --help
 ```
 
 To install editable command wrappers into a virtual environment instead:
@@ -44,8 +44,8 @@ After installation, the console scripts are:
 | `runkeeper-export` | Inspect, search, show, and map Runkeeper activity exports. |
 | `export-inspector` | Launch the desktop GUI. |
 
-The examples below use `uv run python <file>.py ...` so they work directly from
-a checkout without installation.
+The examples below use `uv run <script> ...` so they work directly from a
+checkout without installation.
 
 ## Untappd CLI
 
@@ -54,32 +54,32 @@ Untappd exports are JSON files containing check-in history.
 Show summary stats and top lists:
 
 ```bash
-uv run python untappd.py info ~/Downloads/untappd_history_export.json
+uv run untappd-export info ~/Downloads/untappd_history_export.json
 ```
 
 Show a larger top-N report:
 
 ```bash
-uv run python untappd.py info ~/Downloads/untappd_history_export.json --top 25
+uv run untappd-export info ~/Downloads/untappd_history_export.json --top 25
 ```
 
 Focus the report on one beer or venue:
 
 ```bash
-uv run python untappd.py info ~/Downloads/untappd_history_export.json --beer-count "Utah DIPA"
-uv run python untappd.py info ~/Downloads/untappd_history_export.json --venue-count "Untappd at Home"
+uv run untappd-export info ~/Downloads/untappd_history_export.json --beer-count "Utah DIPA"
+uv run untappd-export info ~/Downloads/untappd_history_export.json --venue-count "Untappd at Home"
 ```
 
 Search check-ins:
 
 ```bash
-uv run python untappd.py search ~/Downloads/untappd_history_export.json "west coast" --limit 10
+uv run untappd-export search ~/Downloads/untappd_history_export.json "west coast" --limit 10
 ```
 
 Filter and sort search results:
 
 ```bash
-uv run python untappd.py search ~/Downloads/untappd_history_export.json \
+uv run untappd-export search ~/Downloads/untappd_history_export.json \
   --brewery "Omnipollo" \
   --min-rating 4 \
   --sort rating-desc
@@ -89,7 +89,7 @@ Show one check-in in full. The identifier can be the check-in number printed by
 `search` or a raw Untappd `checkin_id`.
 
 ```bash
-uv run python untappd.py show ~/Downloads/untappd_history_export.json 3927
+uv run untappd-export show ~/Downloads/untappd_history_export.json 3927
 ```
 
 ## Gmail CLI
@@ -99,31 +99,31 @@ Gmail exports usually come from Google Takeout as an `.mbox` file.
 Show mailbox stats:
 
 ```bash
-uv run python google_mail.py info ~/Downloads/Takeout/Mail/All\ mail\ Including\ Spam\ and\ Trash.mbox
+uv run google-mail info ~/Downloads/Takeout/Mail/All\ mail\ Including\ Spam\ and\ Trash.mbox
 ```
 
 Search a raw mbox:
 
 ```bash
-uv run python google_mail.py search ~/Downloads/mail.mbox invoice --from example.com --limit 20
+uv run google-mail search ~/Downloads/mail.mbox invoice --from example.com --limit 20
 ```
 
 Build a SQLite full-text index for faster repeated searches:
 
 ```bash
-uv run python google_mail.py index ~/Downloads/mail.mbox gmail_index.sqlite
+uv run google-mail index ~/Downloads/mail.mbox gmail_index.sqlite
 ```
 
 Search the index:
 
 ```bash
-uv run python google_mail.py search gmail_index.sqlite "renewal notice" --after 2024-01-01
+uv run google-mail search gmail_index.sqlite "renewal notice" --after 2024-01-01
 ```
 
 Show a full message by the message index printed by `search`:
 
 ```bash
-uv run python google_mail.py show gmail_index.sqlite 12345
+uv run google-mail show gmail_index.sqlite 12345
 ```
 
 Useful options include `--from`, `--to`, `--subject`, `--label`, `--after`,
@@ -137,20 +137,20 @@ ZIP exports. Directory mode recursively loads `*.zip` files.
 Show activity stats:
 
 ```bash
-uv run python runkeeper.py info ~/Downloads/runkeeper-export.zip
-uv run python runkeeper.py info ~/Downloads/runkeeper-exports/
+uv run runkeeper-export info ~/Downloads/runkeeper-export.zip
+uv run runkeeper-export info ~/Downloads/runkeeper-exports/
 ```
 
 Search activities:
 
 ```bash
-uv run python runkeeper.py search ~/Downloads/runkeeper-exports/ run --after 2025-01-01
+uv run runkeeper-export search ~/Downloads/runkeeper-exports/ run --after 2025-01-01
 ```
 
 Filter by type, distance, duration, and sort order:
 
 ```bash
-uv run python runkeeper.py search ~/Downloads/runkeeper-exports/ \
+uv run runkeeper-export search ~/Downloads/runkeeper-exports/ \
   --type Running \
   --min-distance 5 \
   --sort pace-asc
@@ -159,21 +159,21 @@ uv run python runkeeper.py search ~/Downloads/runkeeper-exports/ \
 Show one activity by numeric index or GPX file name:
 
 ```bash
-uv run python runkeeper.py show ~/Downloads/runkeeper-exports/ 42
-uv run python runkeeper.py show ~/Downloads/runkeeper-exports/ 2026-04-22-072752.gpx
+uv run runkeeper-export show ~/Downloads/runkeeper-exports/ 42
+uv run runkeeper-export show ~/Downloads/runkeeper-exports/ 2026-04-22-072752.gpx
 ```
 
 Generate an HTML activity map:
 
 ```bash
-uv run python runkeeper.py map ~/Downloads/runkeeper-exports/ 42 -o runkeeper-map.html
+uv run runkeeper-export map ~/Downloads/runkeeper-exports/ 42 -o runkeeper-map.html
 ```
 
 Serve or open the map through local HTTP so map tiles load correctly:
 
 ```bash
-uv run python runkeeper.py map ~/Downloads/runkeeper-exports/ 42 --serve
-uv run python runkeeper.py map ~/Downloads/runkeeper-exports/ 42 --open
+uv run runkeeper-export map ~/Downloads/runkeeper-exports/ 42 --serve
+uv run runkeeper-export map ~/Downloads/runkeeper-exports/ 42 --open
 ```
 
 ## Messenger CLI
@@ -184,19 +184,19 @@ a directory containing JSON files and/or ZIPs.
 Render a readable chat history:
 
 ```bash
-uv run python show_messenger_chat.py ~/Downloads/facebook-export.zip
+uv run messenger-chat ~/Downloads/facebook-export.zip
 ```
 
 Show stats only:
 
 ```bash
-uv run python show_messenger_chat.py ~/Downloads/facebook-export.zip --info
+uv run messenger-chat ~/Downloads/facebook-export.zip --info
 ```
 
 Search and filter by date:
 
 ```bash
-uv run python show_messenger_chat.py ~/Downloads/facebook-export.zip \
+uv run messenger-chat ~/Downloads/facebook-export.zip \
   --search "project dinner" \
   --from 2022-01-01 \
   --until 2022-12-31
@@ -205,7 +205,7 @@ uv run python show_messenger_chat.py ~/Downloads/facebook-export.zip \
 Write output to a text file:
 
 ```bash
-uv run python show_messenger_chat.py ~/Downloads/facebook-export.zip -o chat.txt
+uv run messenger-chat ~/Downloads/facebook-export.zip -o chat.txt
 ```
 
 Use `--pager` for interactive message-by-message reading, `--any` to match any
@@ -270,8 +270,8 @@ simplest way to let `uv` select a compatible interpreter.
 For command-specific options:
 
 ```bash
-uv run python untappd.py --help
-uv run python google_mail.py --help
-uv run python runkeeper.py --help
-uv run python show_messenger_chat.py --help
+uv run untappd-export --help
+uv run google-mail --help
+uv run runkeeper-export --help
+uv run messenger-chat --help
 ```

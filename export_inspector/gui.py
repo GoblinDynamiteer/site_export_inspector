@@ -60,9 +60,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import runkeeper
-import show_messenger_chat
-import untappd
+from export_inspector import messenger_chat, runkeeper, untappd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -276,21 +274,21 @@ def build_embedded_runkeeper_map_html(
 
 def messenger_search_blob(message: dict, timezone_name: str) -> str:
     values: list[str] = [
-        show_messenger_chat.repair_text(message.get("sender_name", "")),
-        show_messenger_chat.repair_text(message.get("content", "")),
-        show_messenger_chat.format_swedish_datetime(
+        messenger_chat.repair_text(message.get("sender_name", "")),
+        messenger_chat.repair_text(message.get("content", "")),
+        messenger_chat.format_swedish_datetime(
             message["timestamp_ms"], timezone_name
         ),
     ]
-    values.extend(show_messenger_chat.describe_attachment(message))
-    reactions = show_messenger_chat.describe_reactions(message)
+    values.extend(messenger_chat.describe_attachment(message))
+    reactions = messenger_chat.describe_reactions(message)
     if reactions:
         values.append(reactions)
     return "\n".join(values).lower()
 
 
 def render_message_block(message: dict, timezone_name: str) -> str:
-    return "\n".join(show_messenger_chat.render_message(message, timezone_name, {}))
+    return "\n".join(messenger_chat.render_message(message, timezone_name, {}))
 
 
 class MessengerTab(QWidget):
@@ -405,7 +403,7 @@ class MessengerTab(QWidget):
         input_path: str | None = raw_path or None
 
         try:
-            self.available_threads = show_messenger_chat.discover_threads(input_path)
+            self.available_threads = messenger_chat.discover_threads(input_path)
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
@@ -428,7 +426,7 @@ class MessengerTab(QWidget):
         for signature, sources in self.available_threads:
             self.thread_signatures.append(signature)
             self.thread_list.addItem(
-                f"{show_messenger_chat.signature_label(signature)}  ({len(sources)} source{'s' if len(sources) != 1 else ''})"
+                f"{messenger_chat.signature_label(signature)}  ({len(sources)} source{'s' if len(sources) != 1 else ''})"
             )
 
         self.status_label.setText(f"Found {len(self.available_threads)} chats.")
@@ -444,7 +442,7 @@ class MessengerTab(QWidget):
 
         try:
             self.messages, self.participants, self.paths = (
-                show_messenger_chat.load_exports(
+                messenger_chat.load_exports(
                     input_path,
                     target_signature=signature,
                 )
@@ -465,7 +463,7 @@ class MessengerTab(QWidget):
         if not self.from_enabled.isChecked():
             return None
         try:
-            return show_messenger_chat.parse_from_date(
+            return messenger_chat.parse_from_date(
                 iso_date(self.from_date),
                 self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
             )
@@ -480,7 +478,7 @@ class MessengerTab(QWidget):
 
     def filtered_messages(self) -> list[dict]:
         from_timestamp = self.current_from_timestamp()
-        filtered = show_messenger_chat.filter_messages_from(
+        filtered = messenger_chat.filter_messages_from(
             self.messages, from_timestamp
         )
         query = self.filter_edit.text().strip().lower()
@@ -518,10 +516,10 @@ class MessengerTab(QWidget):
             if (
                 previous_timestamp_ms is not None
                 and current_timestamp - previous_timestamp_ms
-                >= show_messenger_chat.DEFAULT_GAP_SECONDS * 1000
+                >= messenger_chat.DEFAULT_GAP_SECONDS * 1000
             ):
                 blocks.append(
-                    show_messenger_chat.format_gap(
+                    messenger_chat.format_gap(
                         previous_timestamp_ms, current_timestamp
                     )
                 )
