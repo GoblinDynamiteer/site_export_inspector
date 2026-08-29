@@ -8,3 +8,6 @@ gmail_index.sqlite-*
 .codex
 *.json
 *.htm*
+.idea/
+*.egg-info/
+uv.lock
