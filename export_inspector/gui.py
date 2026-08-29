@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import html
 import json
-import os
-import shlex
+import sqlite3
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,10 +16,10 @@ from PySide6.QtCore import (
     QIODevice,
     QPoint,
     QModelIndex,
-    QProcess,
-    QProcessEnvironment,
     QSettings,
     QSortFilterProxyModel,
+    QThread,
+    Signal,
     Qt,
     QUrl,
 )
@@ -30,14 +30,12 @@ from PySide6.QtGui import (
     QPixmap,
     QStandardItem,
     QStandardItemModel,
-    QTextCursor,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDateEdit,
     QFileDialog,
     QFormLayout,
@@ -51,16 +49,16 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
-    QStackedWidget,
     QTabWidget,
     QTableView,
     QVBoxLayout,
     QWidget,
 )
 
-from export_inspector import messenger_chat, runkeeper, untappd
+from export_inspector import google_mail, messenger_chat, runkeeper, untappd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -69,23 +67,8 @@ SETTINGS_ORG = "jk"
 SETTINGS_APP = "export_inspector"
 
 
-def split_terms(value: str) -> list[str]:
-    text = value.strip()
-    if not text:
-        return []
-    return shlex.split(text)
-
-
 def iso_date(date_edit: QDateEdit) -> str:
     return date_edit.date().toString("yyyy-MM-dd")
-
-
-def make_env() -> QProcessEnvironment:
-    env = QProcessEnvironment.systemEnvironment()
-    current = env.value("PYTHONPATH", "")
-    root = str(PROJECT_ROOT)
-    env.insert("PYTHONPATH", f"{root}{os.pathsep + current if current else ''}")
-    return env
 
 
 def line_edit(placeholder: str = "", text: str = "") -> QLineEdit:
@@ -538,235 +521,354 @@ class MessengerTab(QWidget):
         self.status_label.setText(rendered_text)
 
 
-class ProcessTab(QWidget):
-    def __init__(self, module_name: str, parent: QWidget | None = None) -> None:
+GMAIL_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 21
+GMAIL_RECORD_ROLE = int(Qt.ItemDataRole.UserRole) + 22
+GMAIL_SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 23
+
+
+@dataclass
+class GmailRecord:
+    message_index: int
+    source_path: str
+    source_offset: int | None
+    date_text: str
+    date_sort: int
+    sender: str
+    recipients: str
+    subject: str
+    labels: str
+    thread_id: str
+    snippet: str
+
+
+class GmailFilterProxy(QSortFilterProxyModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.query_terms: list[str] = []
+
+    def set_query(self, query: str) -> None:
+        self.query_terms = query.lower().split()
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not self.query_terms:
+            return True
+        source_index = self.sourceModel().index(source_row, 0, source_parent)
+        search_blob = self.sourceModel().data(source_index, GMAIL_SEARCH_ROLE) or ""
+        lowered = str(search_blob).lower()
+        return all(term in lowered for term in self.query_terms)
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        left_value = self.sourceModel().data(left, GMAIL_SORT_ROLE)
+        right_value = self.sourceModel().data(right, GMAIL_SORT_ROLE)
+        if left_value is not None and right_value is not None:
+            return left_value < right_value
+        return super().lessThan(left, right)
+
+
+@dataclass
+class MboxConversionResult:
+    mbox_path: Path
+    index_path: Path
+    message_count: int
+
+
+class MboxConversionThread(QThread):
+    progress_changed = Signal(int, int)
+    conversion_finished = Signal(object)
+    conversion_failed = Signal(str)
+
+    def __init__(
+        self,
+        mbox_path: Path,
+        index_path: Path,
+        max_body_chars: int,
+        overwrite: bool,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.module_name = module_name
-        self.process = QProcess(self)
-        self.process.setProcessEnvironment(make_env())
-        self.process.readyReadStandardOutput.connect(self._drain_stdout)
-        self.process.readyReadStandardError.connect(self._drain_stderr)
-        self.process.started.connect(self._on_started)
-        self.process.finished.connect(self._on_finished)
+        self.mbox_path = mbox_path
+        self.index_path = index_path
+        self.max_body_chars = max_body_chars
+        self.overwrite = overwrite
 
-        self.run_button = QPushButton("Run")
-        self.stop_button = QPushButton("Stop")
-        self.clear_button = QPushButton("Clear Output")
-        self.status_label = QLabel("Idle")
-        self.command_label = QLabel("")
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setLineWrapMode(QPlainTextEdit.NoWrap)
+    def run(self) -> None:
+        try:
+            conn = google_mail.open_database(self.index_path, force=self.overwrite)
+            try:
+                message_count, stats = google_mail.index_mbox(
+                    self.mbox_path,
+                    conn,
+                    max_body_chars=self.max_body_chars,
+                    show_progress=False,
+                    progress_callback=self.update_progress,
+                )
+                google_mail.write_index_metadata(
+                    conn,
+                    self.mbox_path,
+                    message_count,
+                    self.max_body_chars,
+                    stats,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except (Exception, SystemExit) as exc:
+            self.conversion_failed.emit(str(exc))
+            return
 
-        mono = QFont("Monospace")
-        mono.setStyleHint(QFont.Monospace)
-        self.output.setFont(mono)
-        self.command_label.setFont(mono)
-        self.command_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.command_label.setWordWrap(True)
+        self.conversion_finished.emit(
+            MboxConversionResult(self.mbox_path, self.index_path, message_count)
+        )
 
-        self.run_button.clicked.connect(self.run_current)
-        self.stop_button.clicked.connect(self.stop_process)
-        self.clear_button.clicked.connect(self.output.clear)
-        self.stop_button.setEnabled(False)
+    def update_progress(
+        self, message_count: int, processed_bytes: int, total_bytes: int
+    ) -> None:
+        if total_bytes <= 0:
+            progress_value = 1000
+        else:
+            progress_value = int((processed_bytes / total_bytes) * 1000)
+        self.progress_changed.emit(message_count, min(progress_value, 1000))
 
-    def build_shell_layout(self, controls_layout: QVBoxLayout) -> None:
+
+class ConvertMboxWidget(QWidget):
+    def __init__(self, gmail_tab: "GoogleMailTab") -> None:
+        super().__init__(gmail_tab.window(), Qt.Window)
+        self.gmail_tab = gmail_tab
+        self.conversion_thread: MboxConversionThread | None = None
+        self.setWindowTitle("Convert mbox")
+        self.setMinimumWidth(620)
+
+        self.path_edit = line_edit("Mailbox .mbox file")
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.pick_mbox)
+        self.browse_button = browse_button
+
+        convert_button = QPushButton("Convert")
+        convert_button.clicked.connect(self.convert)
+        self.convert_button = convert_button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.close)
+        self.close_button = close_button
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.status_label = QLabel()
+        self.status_label.setVisible(False)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 18, 18, 18)
         root.setSpacing(14)
-        root.addLayout(controls_layout)
 
-        action_row = QHBoxLayout()
-        action_row.addWidget(self.run_button)
-        action_row.addWidget(self.stop_button)
-        action_row.addWidget(self.clear_button)
-        action_row.addStretch(1)
-        action_row.addWidget(self.status_label)
-        root.addLayout(action_row)
+        source_box = QGroupBox("Source")
+        source_layout = QGridLayout(source_box)
+        source_layout.addWidget(QLabel("Mbox file"), 0, 0)
+        source_layout.addWidget(self.path_edit, 0, 1)
+        source_layout.addWidget(browse_button, 0, 2)
+        root.addWidget(source_box)
+        root.addWidget(self.progress_bar)
+        root.addWidget(self.status_label)
 
-        command_box = QGroupBox("Command")
-        command_layout = QVBoxLayout(command_box)
-        command_layout.addWidget(self.command_label)
-        root.addWidget(command_box)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        actions.addWidget(close_button)
+        actions.addWidget(convert_button)
+        root.addLayout(actions)
 
-        output_box = QGroupBox("Output")
-        output_layout = QVBoxLayout(output_box)
-        output_layout.addWidget(self.output)
-        root.addWidget(output_box, 1)
+        self.refresh_source_path()
 
-    def run_current(self) -> None:
-        raise NotImplementedError
-
-    def start_module(
-        self, args: list[str], working_directory: str | None = None
-    ) -> None:
-        if self.process.state() != QProcess.NotRunning:
-            QMessageBox.warning(
-                self, "Busy", "A command is already running in this tab."
+    def refresh_source_path(self) -> None:
+        source_path = self.gmail_tab.path_edit.text().strip()
+        if not source_path:
+            source_path = settings_text(
+                "google_mail/convert_mbox_path",
+                settings_text("google_mail/input_path"),
             )
-            return
+        self.path_edit.setText(source_path)
 
-        self.output.clear()
-        if working_directory:
-            self.process.setWorkingDirectory(working_directory)
-        else:
-            self.process.setWorkingDirectory(str(PROJECT_ROOT))
-
-        command = [sys.executable, "-m", self.module_name, *args]
-        self.command_label.setText(" ".join(shlex.quote(part) for part in command))
-        self.status_label.setText("Starting…")
-        self.process.start(sys.executable, ["-m", self.module_name, *args])
-
-    def stop_process(self) -> None:
-        if self.process.state() == QProcess.NotRunning:
-            return
-        self.process.terminate()
-        if not self.process.waitForFinished(1500):
-            self.process.kill()
-
-    def _drain_stdout(self) -> None:
-        data = bytes(self.process.readAllStandardOutput()).decode(
-            "utf-8", errors="replace"
+    def pick_mbox(self) -> None:
+        start_path = dialog_start_path("google_mail/convert_mbox_path")
+        current_path = self.path_edit.text().strip()
+        if current_path:
+            path = Path(current_path).expanduser()
+            if path.is_dir():
+                start_path = str(path)
+            elif path.parent.exists():
+                start_path = str(path.parent)
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select mbox file",
+            start_path,
+            "Mailbox files (*.mbox);;All files (*)",
         )
-        self.output.moveCursor(QTextCursor.End)
-        self.output.insertPlainText(data)
-        self.output.moveCursor(QTextCursor.End)
+        if path:
+            self.path_edit.setText(path)
+            remember_text("google_mail/convert_mbox_path", path)
 
-    def _drain_stderr(self) -> None:
-        data = bytes(self.process.readAllStandardError()).decode(
-            "utf-8", errors="replace"
+    def selected_mbox_path(self) -> Path | None:
+        input_path = self.path_edit.text().strip()
+        if not input_path:
+            return None
+        return Path(input_path).expanduser()
+
+    def convert(self) -> None:
+        mbox_path = self.selected_mbox_path()
+        if mbox_path is None:
+            QMessageBox.warning(self, "Missing input", "Select an .mbox file first.")
+            return
+        remember_text("google_mail/convert_mbox_path", str(mbox_path))
+        self.gmail_tab.convert_mbox_to_sqlite(mbox_path, self)
+
+    def start_conversion(
+        self,
+        mbox_path: Path,
+        index_path: Path,
+        max_body_chars: int,
+        overwrite: bool,
+    ) -> None:
+        self.path_edit.setEnabled(False)
+        self.browse_button.setEnabled(False)
+        self.convert_button.setEnabled(False)
+        self.close_button.setEnabled(False)
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.status_label.setText("Starting conversion...")
+        self.status_label.setVisible(True)
+
+        thread = MboxConversionThread(
+            mbox_path,
+            index_path,
+            max_body_chars,
+            overwrite,
+            self,
         )
-        self.output.moveCursor(QTextCursor.End)
-        self.output.insertPlainText(data)
-        self.output.moveCursor(QTextCursor.End)
+        thread.progress_changed.connect(self.update_progress)
+        thread.conversion_finished.connect(self.finish_conversion)
+        thread.conversion_failed.connect(self.fail_conversion)
+        thread.finished.connect(thread.deleteLater)
+        self.conversion_thread = thread
+        thread.start()
 
-    def _on_started(self) -> None:
-        self.run_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.status_label.setText("Running")
+    def update_progress(self, message_count: int, progress_value: int) -> None:
+        self.progress_bar.setValue(progress_value)
+        self.status_label.setText(f"Indexed {message_count} messages...")
 
-    def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
-        self.run_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        if exit_status == QProcess.NormalExit:
-            self.status_label.setText(f"Finished ({exit_code})")
-        else:
-            self.status_label.setText("Crashed")
+    def finish_conversion(self, result: MboxConversionResult) -> None:
+        self.conversion_thread = None
+        self.reset_controls()
+        remember_text("google_mail/convert_mbox_path", str(result.mbox_path))
+        remember_text("google_mail/index_output", str(result.index_path))
+        self.gmail_tab.path_edit.setText(str(result.index_path))
+        remember_text("google_mail/input_path", str(result.index_path))
+        QMessageBox.information(
+            self,
+            "Conversion complete",
+            f"Indexed {result.message_count} messages into:\n{result.index_path}",
+        )
+        self.gmail_tab.load_mail()
+        self.close()
+
+    def fail_conversion(self, message: str) -> None:
+        self.conversion_thread = None
+        self.reset_controls()
+        QMessageBox.critical(self, "Conversion failed", message)
+
+    def reset_controls(self) -> None:
+        self.path_edit.setEnabled(True)
+        self.browse_button.setEnabled(True)
+        self.convert_button.setEnabled(True)
+        self.close_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.status_label.setVisible(False)
+
+    def closeEvent(self, event: object) -> None:
+        if self.conversion_thread is not None:
+            QMessageBox.information(
+                self,
+                "Conversion running",
+                "Wait for the conversion to finish before closing this window.",
+            )
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
-class GoogleMailTab(ProcessTab):
+class GoogleMailTab(QWidget):
     def __init__(self) -> None:
-        super().__init__("google_mail")
+        super().__init__()
+        self.records: list[GmailRecord] = []
+        self.selected_record: GmailRecord | None = None
+        self.convert_widget: ConvertMboxWidget | None = None
+
         self.path_edit = line_edit("Mailbox .mbox or SQLite index")
         self.path_edit.setText(settings_text("google_mail/input_path"))
         browse_input = QPushButton("Browse")
         browse_input.clicked.connect(self.pick_input)
-
-        self.action_combo = QComboBox()
-        self.action_combo.addItems(["info", "search", "show", "index"])
-        self.action_stack = QStackedWidget()
-        self.action_combo.currentIndexChanged.connect(self.action_stack.setCurrentIndex)
-
+        load_button = QPushButton("Load")
+        load_button.clicked.connect(self.load_mail)
         self.timezone_edit = line_edit(text=DEFAULT_TIMEZONE)
-
-        self.info_top = QSpinBox()
-        self.info_top.setRange(1, 500)
-        self.info_top.setValue(10)
-
-        self.search_terms = line_edit("order receipt sofa")
-        self.search_from = line_edit("sender contains…")
-        self.search_to = line_edit("recipient contains…")
-        self.search_subject = line_edit("subject contains…")
-        self.search_label = line_edit("label contains…")
-        self.search_after_enabled, self.search_after = create_date_controls()
-        self.search_before_enabled, self.search_before = create_date_controls()
-        self.search_any = QCheckBox("Match any term")
-        self.search_headers_only = QCheckBox("Headers only")
-        self.search_limit = QSpinBox()
-        self.search_limit.setRange(1, 5000)
-        self.search_limit.setValue(20)
-
-        self.show_index = QSpinBox()
-        self.show_index.setRange(1, 50_000_000)
-        self.show_index.setValue(1)
-
-        self.index_output = line_edit(
-            text=settings_text("google_mail/index_output", "gmail_index.sqlite")
-        )
+        self.filter_edit = line_edit("Filter mail")
+        self.filter_edit.textChanged.connect(self.apply_filter)
+        self.status_label = QLabel("0/0")
         self.index_max_body = QSpinBox()
         self.index_max_body.setRange(1000, 1_000_000)
-        self.index_max_body.setValue(50_000)
-        self.index_force = QCheckBox("Overwrite if it exists")
-        browse_index = QPushButton("Save As…")
-        browse_index.clicked.connect(self.pick_index_output)
+        self.index_max_body.setValue(google_mail.DEFAULT_MAX_BODY_CHARS)
 
-        controls = QVBoxLayout()
+        self.model = QStandardItemModel(0, 3, self)
+        self.model.setHorizontalHeaderLabels(["Datetime", "Sender", "Title"])
+        self.proxy_model = GmailFilterProxy()
+        self.proxy_model.setSourceModel(self.model)
+
+        self.table = QTableView()
+        self.table.setModel(self.proxy_model)
+        self.table.setSortingEnabled(True)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.setSelectionMode(QTableView.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.selectionModel().currentRowChanged.connect(self.select_mail)
+
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self.detail_text = QPlainTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.detail_text.setFont(mono)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+
         source_box = QGroupBox("Source")
         source_layout = QGridLayout(source_box)
         source_layout.addWidget(QLabel("Path"), 0, 0)
         source_layout.addWidget(self.path_edit, 0, 1, 1, 2)
         source_layout.addWidget(browse_input, 0, 3)
-        controls.addWidget(source_box)
+        source_layout.addWidget(load_button, 0, 4)
+        source_layout.addWidget(QLabel("Timezone"), 1, 0)
+        source_layout.addWidget(self.timezone_edit, 1, 1)
+        source_layout.addWidget(QLabel("Max body chars in SQLite"), 1, 2)
+        source_layout.addWidget(self.index_max_body, 1, 3)
+        root.addWidget(source_box)
 
-        action_box = QGroupBox("Action")
-        action_layout = QVBoxLayout(action_box)
-        action_layout.addWidget(self.action_combo)
-        action_layout.addWidget(self.action_stack)
-        controls.addWidget(action_box)
+        filter_box = QGroupBox("Filter")
+        filter_layout = QHBoxLayout(filter_box)
+        filter_layout.addWidget(self.filter_edit)
+        filter_layout.addWidget(self.status_label)
+        root.addWidget(filter_box)
 
-        self.action_stack.addWidget(self._build_info_page())
-        self.action_stack.addWidget(self._build_search_page())
-        self.action_stack.addWidget(self._build_show_page())
-        self.action_stack.addWidget(self._build_index_page(browse_index))
+        table_box = QGroupBox("Mail")
+        table_layout = QVBoxLayout(table_box)
+        table_layout.addWidget(self.table)
+        root.addWidget(table_box, 2)
 
-        self.build_shell_layout(controls)
-
-    def _build_info_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Top rows", self.info_top)
-        return page
-
-    def _build_search_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Terms", self.search_terms)
-        layout.addRow("From filter", self.search_from)
-        layout.addRow("To filter", self.search_to)
-        layout.addRow("Subject filter", self.search_subject)
-        layout.addRow("Label filter", self.search_label)
-
-        after_row = QHBoxLayout()
-        after_row.addWidget(self.search_after_enabled)
-        after_row.addWidget(self.search_after)
-        layout.addRow("After", after_row)
-
-        before_row = QHBoxLayout()
-        before_row.addWidget(self.search_before_enabled)
-        before_row.addWidget(self.search_before)
-        layout.addRow("Before", before_row)
-
-        layout.addRow("Limit", self.search_limit)
-        layout.addRow("", self.search_any)
-        layout.addRow("", self.search_headers_only)
-        return page
-
-    def _build_show_page(self) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addRow("Message index", self.show_index)
-        return page
-
-    def _build_index_page(self, browse_index: QPushButton) -> QWidget:
-        page = QWidget()
-        layout = QFormLayout(page)
-        output_row = QHBoxLayout()
-        output_row.addWidget(self.index_output)
-        output_row.addWidget(browse_index)
-        layout.addRow("Index file", output_row)
-        layout.addRow("Max body chars", self.index_max_body)
-        layout.addRow("", self.index_force)
-        return page
+        detail_box = QGroupBox("Contents")
+        detail_layout = QVBoxLayout(detail_box)
+        detail_layout.addWidget(self.detail_text)
+        root.addWidget(detail_box, 1)
 
     def pick_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -779,18 +881,7 @@ class GoogleMailTab(ProcessTab):
             self.path_edit.setText(path)
             remember_text("google_mail/input_path", path)
 
-    def pick_index_output(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save SQLite index",
-            dialog_start_path("google_mail/index_output", self.index_output.text()),
-            "SQLite (*.sqlite)",
-        )
-        if path:
-            self.index_output.setText(path)
-            remember_text("google_mail/index_output", path)
-
-    def run_current(self) -> None:
+    def load_mail(self) -> None:
         input_path = self.path_edit.text().strip()
         if not input_path:
             QMessageBox.warning(
@@ -798,62 +889,325 @@ class GoogleMailTab(ProcessTab):
             )
             return
 
-        remember_text("google_mail/input_path", input_path)
+        path = Path(input_path).expanduser()
+        if not path.exists():
+            QMessageBox.warning(self, "Missing input", f"File not found: {path}")
+            return
 
-        action = self.action_combo.currentText()
-        args = [action, input_path]
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if google_mail.detect_sqlite(path):
+                records = self.load_sqlite_records(path)
+            else:
+                records = self.load_mbox_records(path)
+        except (Exception, SystemExit) as exc:
+            QMessageBox.critical(self, "Load failed", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
 
-        if action == "info":
-            args.extend(
-                ["--timezone", self.timezone_edit.text().strip() or DEFAULT_TIMEZONE]
-            )
-            args.extend(["--top", str(self.info_top.value()), "--no-progress"])
-        elif action == "search":
-            args.extend(split_terms(self.search_terms.text()))
-            if self.search_from.text().strip():
-                args.extend(["--from", self.search_from.text().strip()])
-            if self.search_to.text().strip():
-                args.extend(["--to", self.search_to.text().strip()])
-            if self.search_subject.text().strip():
-                args.extend(["--subject", self.search_subject.text().strip()])
-            if self.search_label.text().strip():
-                args.extend(["--label", self.search_label.text().strip()])
-            if self.search_after_enabled.isChecked():
-                args.extend(["--after", iso_date(self.search_after)])
-            if self.search_before_enabled.isChecked():
-                args.extend(["--before", iso_date(self.search_before)])
-            if self.search_any.isChecked():
-                args.append("--any")
-            if self.search_headers_only.isChecked():
-                args.append("--headers-only")
-            args.extend(["--limit", str(self.search_limit.value())])
-            args.extend(
-                [
-                    "--timezone",
-                    self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
-                    "--no-progress",
-                ]
-            )
-        elif action == "show":
-            args.append(str(self.show_index.value()))
-            args.extend(
-                [
-                    "--timezone",
-                    self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
-                    "--no-progress",
-                ]
-            )
-        elif action == "index":
-            output_path = self.index_output.text().strip() or "gmail_index.sqlite"
-            remember_text("google_mail/index_output", output_path)
-            args.append(output_path)
-            args.extend(
-                ["--max-body-chars", str(self.index_max_body.value()), "--no-progress"]
-            )
-            if self.index_force.isChecked():
-                args.append("--force")
+        remember_text("google_mail/input_path", str(path))
+        self.records = records
+        self.populate_table()
+        self.apply_filter()
+        if self.proxy_model.rowCount() > 0:
+            self.table.selectRow(0)
+        else:
+            self.selected_record = None
+            self.detail_text.setPlainText("No mail found.")
 
-        self.start_module(args)
+    def open_convert_widget(self) -> None:
+        if self.convert_widget is None:
+            self.convert_widget = ConvertMboxWidget(self)
+        self.convert_widget.refresh_source_path()
+        self.convert_widget.show()
+        self.convert_widget.raise_()
+        self.convert_widget.activateWindow()
+
+    def convert_to_sqlite(self) -> None:
+        self.open_convert_widget()
+
+    def convert_mbox_to_sqlite(
+        self, mbox_path: Path, convert_widget: ConvertMboxWidget
+    ) -> None:
+        mbox_path = mbox_path.expanduser()
+        if not mbox_path.exists():
+            QMessageBox.warning(self, "Missing input", f"File not found: {mbox_path}")
+            return
+        if google_mail.detect_sqlite(mbox_path):
+            QMessageBox.information(
+                self, "Already SQLite", "The selected source is already a SQLite index."
+            )
+            return
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save SQLite index",
+            dialog_start_path("google_mail/index_output", "gmail_index.sqlite"),
+            "SQLite (*.sqlite);;All files (*)",
+        )
+        if not output_path:
+            return
+
+        index_path = Path(output_path).expanduser()
+        overwrite = False
+        if index_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Overwrite index?",
+                f"Replace existing SQLite index?\n{index_path}",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            overwrite = True
+
+        convert_widget.start_conversion(
+            mbox_path,
+            index_path,
+            self.index_max_body.value(),
+            overwrite,
+        )
+
+    def load_sqlite_records(self, path: Path) -> list[GmailRecord]:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                    message_index,
+                    date_utc,
+                    date_unix,
+                    sender,
+                    recipients,
+                    subject,
+                    labels,
+                    thread_id,
+                    snippet,
+                    source_path,
+                    source_offset
+                FROM messages
+                ORDER BY date_unix DESC, message_index DESC
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+
+        records: list[GmailRecord] = []
+        timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+        for row in rows:
+            date_text = "n/a"
+            if row["date_utc"]:
+                date_text = google_mail.format_date(
+                    datetime.fromisoformat(row["date_utc"]), timezone
+                )
+            records.append(
+                GmailRecord(
+                    message_index=int(row["message_index"]),
+                    source_path=row["source_path"] or str(path),
+                    source_offset=row["source_offset"],
+                    date_text=date_text,
+                    date_sort=int(row["date_unix"] or 0),
+                    sender=row["sender"] or "unknown",
+                    recipients=row["recipients"] or "",
+                    subject=row["subject"] or "(no subject)",
+                    labels=row["labels"] or "",
+                    thread_id=row["thread_id"] or "",
+                    snippet=row["snippet"] or "",
+                )
+            )
+        return records
+
+    def load_mbox_records(self, path: Path) -> list[GmailRecord]:
+        records: list[GmailRecord] = []
+        current_header_lines: list[bytes] = []
+        current_headers: dict[str, str] = {}
+        in_headers = False
+        have_message = False
+        message_index = 0
+        message_start_offset = 0
+
+        def finalize_current() -> None:
+            nonlocal message_index, current_headers
+            if not have_message:
+                return
+            if not current_headers and current_header_lines:
+                current_headers = google_mail.parse_headers(current_header_lines)
+            message_index += 1
+            records.append(
+                self.record_from_headers(
+                    message_index,
+                    path,
+                    message_start_offset,
+                    current_headers,
+                )
+            )
+
+        with path.open("rb") as handle:
+            while True:
+                line_offset = handle.tell()
+                raw_line = handle.readline()
+                if not raw_line:
+                    break
+                if raw_line.startswith(b"From "):
+                    finalize_current()
+                    current_header_lines = []
+                    current_headers = {}
+                    in_headers = True
+                    have_message = True
+                    message_start_offset = line_offset
+                    continue
+
+                if not have_message:
+                    continue
+                if in_headers:
+                    if raw_line in (b"\n", b"\r\n"):
+                        current_headers = google_mail.parse_headers(current_header_lines)
+                        in_headers = False
+                        continue
+                    current_header_lines.append(raw_line)
+
+        finalize_current()
+        records.sort(
+            key=lambda record: (record.date_sort, record.message_index),
+            reverse=True,
+        )
+        return records
+
+    def record_from_headers(
+        self,
+        message_index: int,
+        path: Path,
+        source_offset: int,
+        headers: dict[str, str],
+    ) -> GmailRecord:
+        parsed_date = google_mail.parse_date(headers.get("date"))
+        if parsed_date is not None:
+            date_sort = int(parsed_date.timestamp())
+            date_text = google_mail.format_date(
+                parsed_date, self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
+            )
+        else:
+            date_sort = 0
+            date_text = "n/a"
+        return GmailRecord(
+            message_index=message_index,
+            source_path=str(path),
+            source_offset=source_offset,
+            date_text=date_text,
+            date_sort=date_sort,
+            sender=google_mail.decode_header_value(headers.get("from")) or "unknown",
+            recipients=google_mail.extract_addresses(
+                headers.get("to", ""), headers.get("cc", ""), headers.get("bcc", "")
+            ),
+            subject=google_mail.decode_header_value(headers.get("subject"))
+            or "(no subject)",
+            labels=google_mail.decode_header_value(headers.get("x-gmail-labels")),
+            thread_id=headers.get("x-gm-thrid", ""),
+            snippet="",
+        )
+
+    def populate_table(self) -> None:
+        self.model.removeRows(0, self.model.rowCount())
+        for record in self.records:
+            row = [
+                QStandardItem(record.date_text),
+                QStandardItem(record.sender),
+                QStandardItem(record.subject),
+            ]
+            sort_values = [
+                record.date_sort,
+                record.sender.lower(),
+                record.subject.lower(),
+            ]
+            search_blob = self.record_search_blob(record)
+            for column, item in enumerate(row):
+                item.setEditable(False)
+                item.setData(record, GMAIL_RECORD_ROLE)
+                item.setData(search_blob, GMAIL_SEARCH_ROLE)
+                item.setData(sort_values[column], GMAIL_SORT_ROLE)
+            self.model.appendRow(row)
+        self.proxy_model.sort(0, Qt.DescendingOrder)
+
+    def apply_filter(self) -> None:
+        self.proxy_model.set_query(self.filter_edit.text())
+        self.status_label.setText(f"{self.proxy_model.rowCount()}/{len(self.records)}")
+
+    def select_mail(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        if not current.isValid():
+            self.selected_record = None
+            self.detail_text.clear()
+            return
+
+        source_index = self.proxy_model.mapToSource(current)
+        record = self.model.item(source_index.row(), 0).data(GMAIL_RECORD_ROLE)
+        self.selected_record = record
+        self.render_mail(record)
+
+    def render_mail(self, record: GmailRecord) -> None:
+        source_path = Path(record.source_path).expanduser()
+        if not source_path.exists():
+            self.detail_text.setPlainText(
+                self.record_fallback_text(
+                    record, f"Source mbox not found: {source_path}"
+                )
+            )
+            return
+
+        try:
+            if record.source_offset is not None:
+                headers, body_text = google_mail.load_message_from_offset(
+                    source_path, int(record.source_offset)
+                )
+            else:
+                headers, body_text = google_mail.load_message_from_mbox(
+                    source_path, record.message_index, show_progress=False
+                )
+            text = google_mail.format_full_message(
+                headers,
+                body_text,
+                self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
+            )
+        except SystemExit as exc:
+            text = self.record_fallback_text(record, str(exc))
+        except Exception as exc:
+            text = self.record_fallback_text(
+                record, f"Could not load message body: {exc}"
+            )
+        self.detail_text.setPlainText(text)
+
+    def record_fallback_text(self, record: GmailRecord, reason: str) -> str:
+        lines = [
+            f"Date: {record.date_text}",
+            f"From: {record.sender}",
+        ]
+        if record.recipients:
+            lines.append(f"To: {record.recipients}")
+        lines.append(f"Subject: {record.subject}")
+        if record.labels:
+            lines.append(f"Labels: {record.labels}")
+        if record.thread_id:
+            lines.append(f"Thread: {record.thread_id}")
+        lines.extend(["", reason])
+        if record.snippet:
+            lines.extend(["", record.snippet])
+        return "\n".join(lines)
+
+    def record_search_blob(self, record: GmailRecord) -> str:
+        return "\n".join(
+            [
+                record.date_text,
+                record.sender,
+                record.recipients,
+                record.subject,
+                record.labels,
+                record.thread_id,
+                record.snippet,
+                str(record.message_index),
+            ]
+        )
 
 
 UNTAPPD_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 11
@@ -2544,11 +2898,24 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
+        self.google_mail_tab = GoogleMailTab()
         tabs.addTab(MessengerTab(), "Messenger")
-        tabs.addTab(GoogleMailTab(), "Google Mail")
+        tabs.addTab(self.google_mail_tab, "Google Mail")
         tabs.addTab(UntappdTab(), "Untappd")
         tabs.addTab(RunkeeperTab(), "Runkeeper")
         self.setCentralWidget(tabs)
+
+        file_menu = self.menuBar().addMenu("File")
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(QApplication.quit)
+        file_menu.addAction(quit_action)
+
+        tools_menu = self.menuBar().addMenu("Tools")
+        gmail_menu = tools_menu.addMenu("Gmail")
+        convert_mbox_action = QAction("Convert mbox", self)
+        convert_mbox_action.triggered.connect(self.google_mail_tab.open_convert_widget)
+        gmail_menu.addAction(convert_mbox_action)
 
         about = QAction("About", self)
         about.triggered.connect(self.show_about)

@@ -16,7 +16,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 from zoneinfo import ZoneInfo
 
 
@@ -1334,6 +1334,7 @@ def index_mbox(
     conn: sqlite3.Connection,
     max_body_chars: int,
     show_progress: bool,
+    progress_callback: Callable[[int, int, int], None] | None = None,
 ) -> tuple[int, IndexStats]:
     current_header_lines: list[bytes] = []
     current_headers: dict[str, str] = {}
@@ -1348,6 +1349,7 @@ def index_mbox(
     pending_attachment_counted = False
     pending_qp_line = b""
     stats = IndexStats()
+    total_bytes = mbox_path.stat().st_size
 
     conn.execute("BEGIN")
     with mbox_path.open("rb") as handle:
@@ -1378,6 +1380,11 @@ def index_mbox(
                             file=sys.stderr,
                             flush=True,
                         )
+                    if (
+                        progress_callback is not None
+                        and message_index % COMMIT_EVERY == 0
+                    ):
+                        progress_callback(message_index, line_offset, total_bytes)
 
                 current_header_lines = []
                 current_headers = {}
@@ -1448,6 +1455,8 @@ def index_mbox(
             stats,
         )
     conn.commit()
+    if progress_callback is not None:
+        progress_callback(message_index, total_bytes, total_bytes)
     return message_index, stats
 
 

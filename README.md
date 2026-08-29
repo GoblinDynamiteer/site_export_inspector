@@ -226,9 +226,12 @@ Or, after installing the package:
 export-inspector
 ```
 
-The GUI includes tabs for supported export types. The Untappd tab can load a
-JSON export, filter check-ins, inspect details, preview photos, and browse
-aggregate views for beers, breweries, and venues.
+The GUI includes tabs for supported export types. The Google Mail tab can load
+Gmail `.mbox` files or generated SQLite indexes, filter messages live, show a
+message table with details below, and convert an `.mbox` to SQLite from
+`Tools > Gmail > Convert mbox` after asking where to save it. The Untappd tab can load a JSON export, filter check-ins,
+inspect details, preview photos, and browse aggregate views for beers,
+breweries, and venues.
 
 ### Untappd Check-ins
 
