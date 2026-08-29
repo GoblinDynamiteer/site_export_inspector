@@ -2929,69 +2929,8 @@ class MainWindow(QMainWindow):
         )
 
 
-def apply_style(app: QApplication) -> None:
-    app.setStyleSheet(
-        """
-        QWidget {
-          background: #f6f3ec;
-          color: #1f2933;
-          font-size: 13px;
-        }
-        QMainWindow, QTabWidget::pane, QGroupBox {
-          background: #f6f3ec;
-        }
-        QGroupBox {
-          border: 1px solid #d9d1c4;
-          border-radius: 8px;
-          margin-top: 10px;
-          padding-top: 10px;
-        }
-        QGroupBox::title {
-          subcontrol-origin: margin;
-          left: 10px;
-          padding: 0 4px;
-          color: #6b7280;
-        }
-        QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit {
-          background: #fffdf8;
-          border: 1px solid #c9c0b2;
-          border-radius: 6px;
-          padding: 6px 8px;
-        }
-        QPushButton {
-          background: #173f5f;
-          color: white;
-          border: none;
-          border-radius: 6px;
-          padding: 7px 12px;
-        }
-        QPushButton:hover {
-          background: #215676;
-        }
-        QPushButton:disabled {
-          background: #9ca3af;
-        }
-        QTabBar::tab {
-          background: #ebe5da;
-          border: 1px solid #d9d1c4;
-          padding: 8px 14px;
-          margin-right: 4px;
-          border-top-left-radius: 6px;
-          border-top-right-radius: 6px;
-        }
-        QTabBar::tab:selected {
-          background: #fffdf8;
-        }
-        QLabel {
-          background: transparent;
-        }
-        """
-    )
-
-
 def main() -> None:
     app = QApplication(sys.argv)
-    apply_style(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
