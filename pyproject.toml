@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "export-inspector"
 version = "0.1.0"
 description = "Desktop and CLI tools for inspecting personal data exports."
-readme = {text = "Desktop and CLI inspectors for Messenger, Gmail mbox, Untappd, and Runkeeper exports.", content-type = "text/plain"}
-requires-python = ">=3.11"
+readme = "README.md"
+requires-python = ">=3.12"
 dependencies = [
   "PySide6>=6.8",
 ]
@@ -18,13 +18,11 @@ messenger-chat = "show_messenger_chat:main"
 google-mail = "google_mail:main"
 untappd-export = "untappd:main"
 runkeeper-export = "runkeeper:main"
-runkeeper-map = "runkeeper_map:main"
 
 [tool.setuptools]
 py-modules = [
   "google_mail",
   "runkeeper",
-  "runkeeper_map",
   "show_messenger_chat",
   "untappd",
 ]
