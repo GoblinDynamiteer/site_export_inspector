@@ -13,11 +13,15 @@ import re
 import sqlite3
 import sys
 from collections import Counter
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterable
 from zoneinfo import ZoneInfo
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
 
 
 PROGRESS_EVERY = 10000
@@ -29,35 +33,6 @@ BASE64_CHARS = set(
 )
 ANSI_RESET = "\033[0m"
 ANSI_HIGHLIGHT = "\033[1;30;43m"
-
-
-@dataclass
-class MailboxStats:
-    total_messages: int = 0
-    multipart_messages: int = 0
-    attachment_messages: int = 0
-    attachment_files: int = 0
-    first_dt: datetime | None = None
-    last_dt: datetime | None = None
-
-
-@dataclass
-class SearchResult:
-    index: int
-    date_text: str
-    sender: str
-    to_text: str
-    subject: str
-    labels: str
-    thread_id: str
-    snippet: str
-
-
-@dataclass
-class IndexStats:
-    multipart_messages: int = 0
-    attachment_messages: int = 0
-    attachment_files: int = 0
 
 
 def parse_args() -> argparse.Namespace:
