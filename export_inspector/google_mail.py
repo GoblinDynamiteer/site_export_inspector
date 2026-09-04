@@ -3,34 +3,47 @@
 from __future__ import annotations
 
 import argparse
-import email.header
 import email.parser
 import email.policy
-import email.utils
 import html
-import quopri
 import re
 import sqlite3
 import sys
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable
 from zoneinfo import ZoneInfo
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from export_inspector.gmail._message import (
+    BASE64_CHARS,
+    SNIPPET_LIMIT,
+    choose_text_candidate,
+    consume_body_line,
+    decode_header_value,
+    extract_addresses,
+    extract_people,
+    line_text_candidates,
+    looks_like_encoded_blob,
+    parse_date,
+    parse_headers,
+    shorten,
+)
 from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
+from export_inspector.gmail.sqlite_index import (
+    COMMIT_EVERY,
+    finalize_index_message,
+    index_mbox,
+    load_metadata,
+    open_database,
+    write_index_metadata,
+)
 
 
 PROGRESS_EVERY = 10000
-COMMIT_EVERY = 1000
-SNIPPET_LIMIT = 220
 DEFAULT_MAX_BODY_CHARS = 50000
-BASE64_CHARS = set(
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
-)
 ANSI_RESET = "\033[0m"
 ANSI_HIGHLIGHT = "\033[1;30;43m"
 
@@ -184,87 +197,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def decode_header_value(value: str | None) -> str:
-    if not value:
-        return ""
-    decoded_parts: list[str] = []
-    for chunk, encoding in email.header.decode_header(value):
-        if isinstance(chunk, bytes):
-            for candidate_encoding in (encoding, "utf-8", "latin-1"):
-                if not candidate_encoding:
-                    continue
-                try:
-                    decoded_parts.append(
-                        chunk.decode(candidate_encoding, errors="replace")
-                    )
-                    break
-                except LookupError:
-                    continue
-            else:
-                decoded_parts.append(chunk.decode("utf-8", errors="replace"))
-        else:
-            decoded_parts.append(chunk)
-    return "".join(decoded_parts).strip()
-
-
-def extract_people(values: Iterable[str]) -> list[str]:
-    decoded_values = [decode_header_value(value) for value in values if value]
-    people: list[str] = []
-    for _, address in email.utils.getaddresses(decoded_values):
-        people.append(address or "unknown")
-    return people
-
-
-def extract_addresses(*values: str) -> str:
-    decoded_values = [decode_header_value(value) for value in values if value]
-    addresses = [address or "unknown" for _, address in email.utils.getaddresses(decoded_values)]
-    return ", ".join(addresses)
-
-
-def parse_headers(header_lines: list[bytes]) -> dict[str, str]:
-    unfolded: list[bytes] = []
-    current = b""
-    for raw_line in header_lines:
-        line = raw_line.rstrip(b"\r\n")
-        if not line:
-            continue
-        if line[:1] in (b" ", b"\t") and current:
-            current += b" " + line.lstrip()
-            continue
-        if current:
-            unfolded.append(current)
-        current = line
-    if current:
-        unfolded.append(current)
-
-    headers: dict[str, str] = {}
-    for line in unfolded:
-        if b":" not in line:
-            continue
-        key, value = line.split(b":", 1)
-        headers[key.decode("utf-8", errors="replace").lower()] = value.decode(
-            "utf-8", errors="replace"
-        ).strip()
-    return headers
-
-
-def parse_date(date_header: str | None) -> datetime | None:
-    if not date_header:
-        return None
-    try:
-        parsed_date = email.utils.parsedate_to_datetime(date_header)
-    except ValueError:
-        try:
-            parsed_date = datetime.fromisoformat(date_header)
-        except ValueError:
-            return None
-    if parsed_date is None:
-        return None
-    if parsed_date.tzinfo is None:
-        parsed_date = parsed_date.replace(tzinfo=ZoneInfo("UTC"))
-    return parsed_date
-
-
 def parse_date_filter(value: str | None, tz_name: str) -> datetime | None:
     if not value:
         return None
@@ -282,68 +214,8 @@ def format_date(dt: datetime | None, tz_name: str) -> str:
     return dt.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def shorten(text: str, limit: int = SNIPPET_LIMIT) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 3] + "..."
-
-
 def use_ansi(args: argparse.Namespace) -> bool:
     return sys.stdout.isatty() and not getattr(args, "no_ansi", False)
-
-
-def looks_like_encoded_blob(raw_line: bytes) -> bool:
-    stripped = raw_line.strip()
-    if len(stripped) < 80:
-        return False
-    if b" " in stripped or b"\t" in stripped:
-        return False
-    return all(byte in BASE64_CHARS for byte in stripped)
-
-
-def line_text_candidates(raw_line: bytes) -> list[str]:
-    stripped = raw_line.strip()
-    if not stripped or looks_like_encoded_blob(stripped):
-        return []
-
-    candidates: list[str] = []
-    decoded = stripped.decode("utf-8", errors="replace")
-    candidates.append(decoded)
-
-    qp_decoded = quopri.decodestring(stripped)
-    qp_text = qp_decoded.decode("utf-8", errors="replace")
-    if qp_text != decoded:
-        candidates.append(qp_text)
-
-    return candidates
-
-
-def consume_body_line(
-    raw_line: bytes,
-    pending_qp_line: bytes,
-) -> tuple[list[str], bytes]:
-    stripped = raw_line.rstrip(b"\r\n")
-    if pending_qp_line:
-        stripped = pending_qp_line + stripped
-        pending_qp_line = b""
-
-    # Quoted-printable soft line breaks often split words across lines, which can
-    # create false matches like "b=\norder-collapse" for the search term "order".
-    if stripped.endswith(b"="):
-        return [], stripped[:-1]
-
-    return line_text_candidates(stripped), pending_qp_line
-
-
-def choose_text_candidate(candidates: list[str]) -> str:
-    if not candidates:
-        return ""
-    for candidate in candidates:
-        compact = " ".join(candidate.split())
-        if compact:
-            return compact
-    return ""
 
 
 def term_matches_text(term: str, text: str) -> bool:
@@ -563,14 +435,6 @@ def scan_mbox_info(
         )
 
     return stats, sender_counts, recipient_counts, subject_counts
-
-
-def load_metadata(conn: sqlite3.Connection) -> dict[str, str]:
-    try:
-        rows = conn.execute("SELECT key, value FROM metadata").fetchall()
-    except sqlite3.OperationalError:
-        return {}
-    return {key: value for key, value in rows}
 
 
 def scan_sqlite_info(
@@ -1170,292 +1034,6 @@ def load_message_from_offset(path: Path, source_offset: int) -> tuple[dict[str, 
             message_lines.append(raw_line)
 
     return parse_message_bytes(b"".join(message_lines))
-
-
-def open_database(path: Path, force: bool) -> sqlite3.Connection:
-    if path.exists():
-        if not force:
-            raise SystemExit(
-                f"Index file already exists: {path}. Use --force to overwrite it."
-            )
-        path.unlink()
-
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=OFF")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA locking_mode=EXCLUSIVE")
-    conn.execute("PRAGMA cache_size=-200000")
-    conn.executescript(
-        """
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY,
-            message_index INTEGER NOT NULL UNIQUE,
-            source_path TEXT NOT NULL,
-            source_offset INTEGER,
-            thread_id TEXT,
-            gmail_message_id TEXT,
-            message_id TEXT,
-            date_utc TEXT,
-            date_unix INTEGER,
-            sender TEXT,
-            recipients TEXT,
-            subject TEXT,
-            labels TEXT,
-            snippet TEXT
-        );
-
-        CREATE VIRTUAL TABLE message_fts USING fts5(
-            sender,
-            recipients,
-            subject,
-            labels,
-            body
-        );
-
-        CREATE TABLE metadata (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        """
-    )
-    return conn
-
-
-def finalize_index_message(
-    conn: sqlite3.Connection,
-    message_index: int,
-    source_path: str,
-    source_offset: int,
-    headers: dict[str, str],
-    body_parts: list[str],
-    stats: IndexStats,
-) -> None:
-    if not headers:
-        return
-
-    sender = decode_header_value(headers.get("from")) or "unknown"
-    recipients = extract_addresses(
-        headers.get("to", ""), headers.get("cc", ""), headers.get("bcc", "")
-    )
-    subject = decode_header_value(headers.get("subject")) or "(no subject)"
-    labels = decode_header_value(headers.get("x-gmail-labels"))
-    thread_id = headers.get("x-gm-thrid", "")
-    gmail_message_id = headers.get("x-gm-msgid", "")
-    message_id = decode_header_value(headers.get("message-id"))
-    parsed_date = parse_date(headers.get("date"))
-    if parsed_date is not None:
-        parsed_date = parsed_date.astimezone(UTC)
-    date_utc = parsed_date.isoformat() if parsed_date else None
-    date_unix = int(parsed_date.timestamp()) if parsed_date else None
-
-    content_type = headers.get("content-type", "").lower()
-    if content_type.startswith("multipart/"):
-        stats.multipart_messages += 1
-
-    attachment_count = int(headers.get("__attachment_count__", "0") or "0")
-    if attachment_count > 0:
-        stats.attachment_messages += 1
-        stats.attachment_files += attachment_count
-
-    body_text = "\n".join(part for part in body_parts if part)
-    snippet = shorten(body_text or subject)
-
-    cursor = conn.execute(
-        """
-        INSERT INTO messages (
-            message_index,
-            source_path,
-            source_offset,
-            thread_id,
-            gmail_message_id,
-            message_id,
-            date_utc,
-            date_unix,
-            sender,
-            recipients,
-            subject,
-            labels,
-            snippet
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            message_index,
-            source_path,
-            source_offset,
-            thread_id,
-            gmail_message_id,
-            message_id,
-            date_utc,
-            date_unix,
-            sender,
-            recipients,
-            subject,
-            labels,
-            snippet,
-        ),
-    )
-    conn.execute(
-        """
-        INSERT INTO message_fts(rowid, sender, recipients, subject, labels, body)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (cursor.lastrowid, sender, recipients, subject, labels, body_text),
-    )
-
-
-def index_mbox(
-    mbox_path: Path,
-    conn: sqlite3.Connection,
-    max_body_chars: int,
-    show_progress: bool,
-    progress_callback: Callable[[int, int, int], None] | None = None,
-) -> tuple[int, IndexStats]:
-    current_header_lines: list[bytes] = []
-    current_headers: dict[str, str] = {}
-    current_body_parts: list[str] = []
-    current_body_chars = 0
-    in_headers = False
-    have_message = False
-    message_index = 0
-    message_start_offset = 0
-    attachment_count = 0
-    pending_disposition = b""
-    pending_attachment_counted = False
-    pending_qp_line = b""
-    stats = IndexStats()
-    total_bytes = mbox_path.stat().st_size
-
-    conn.execute("BEGIN")
-    with mbox_path.open("rb") as handle:
-        while True:
-            line_offset = handle.tell()
-            raw_line = handle.readline()
-            if not raw_line:
-                break
-            if raw_line.startswith(b"From "):
-                if have_message:
-                    message_index += 1
-                    current_headers["__attachment_count__"] = str(attachment_count)
-                    finalize_index_message(
-                        conn,
-                        message_index,
-                        str(mbox_path),
-                        message_start_offset,
-                        current_headers,
-                        current_body_parts,
-                        stats,
-                    )
-                    if message_index % COMMIT_EVERY == 0:
-                        conn.commit()
-                        conn.execute("BEGIN")
-                    if show_progress and message_index % PROGRESS_EVERY == 0:
-                        print(
-                            f"Indexed {message_index} messages...",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                    if (
-                        progress_callback is not None
-                        and message_index % COMMIT_EVERY == 0
-                    ):
-                        progress_callback(message_index, line_offset, total_bytes)
-
-                current_header_lines = []
-                current_headers = {}
-                current_body_parts = []
-                current_body_chars = 0
-                message_start_offset = line_offset
-                attachment_count = 0
-                pending_disposition = b""
-                pending_attachment_counted = False
-                pending_qp_line = b""
-                in_headers = True
-                have_message = True
-                continue
-
-            if not have_message:
-                continue
-
-            if in_headers:
-                if raw_line in (b"\n", b"\r\n"):
-                    current_headers = parse_headers(current_header_lines)
-                    in_headers = False
-                    continue
-                current_header_lines.append(raw_line)
-                continue
-
-            lower_line = raw_line.lower().rstrip(b"\r\n")
-            if lower_line.startswith(b"content-disposition:"):
-                pending_disposition = lower_line
-                pending_attachment_counted = False
-                if b"attachment" in pending_disposition:
-                    attachment_count += 1
-                    pending_attachment_counted = True
-                continue
-
-            if pending_disposition and raw_line[:1] in (b" ", b"\t"):
-                pending_disposition += b" " + lower_line.lstrip()
-                if b"attachment" in pending_disposition and not pending_attachment_counted:
-                    attachment_count += 1
-                    pending_attachment_counted = True
-                continue
-
-            pending_disposition = b""
-            pending_attachment_counted = False
-
-            if current_body_chars >= max_body_chars:
-                continue
-
-            candidates, pending_qp_line = consume_body_line(raw_line, pending_qp_line)
-            text = choose_text_candidate(candidates)
-            if not text:
-                continue
-            remaining = max_body_chars - current_body_chars
-            clipped = text[:remaining]
-            if clipped:
-                current_body_parts.append(clipped)
-                current_body_chars += len(clipped)
-
-    if have_message:
-        message_index += 1
-        current_headers["__attachment_count__"] = str(attachment_count)
-        finalize_index_message(
-            conn,
-            message_index,
-            str(mbox_path),
-            message_start_offset,
-            current_headers,
-            current_body_parts,
-            stats,
-        )
-    conn.commit()
-    if progress_callback is not None:
-        progress_callback(message_index, total_bytes, total_bytes)
-    return message_index, stats
-
-
-def write_index_metadata(
-    conn: sqlite3.Connection,
-    mbox_path: Path,
-    message_count: int,
-    max_body_chars: int,
-    stats: IndexStats,
-) -> None:
-    metadata = {
-        "source_path": str(mbox_path),
-        "source_size_bytes": str(mbox_path.stat().st_size),
-        "indexed_at_utc": datetime.now(UTC).isoformat(),
-        "message_count": str(message_count),
-        "max_body_chars": str(max_body_chars),
-        "multipart_messages": str(stats.multipart_messages),
-        "attachment_messages": str(stats.attachment_messages),
-        "attachment_files": str(stats.attachment_files),
-    }
-    conn.executemany(
-        "INSERT INTO metadata(key, value) VALUES (?, ?)",
-        metadata.items(),
-    )
 
 
 def handle_info(args: argparse.Namespace) -> None:

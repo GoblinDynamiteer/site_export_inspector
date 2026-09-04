@@ -6,6 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from export_inspector import google_mail
+from export_inspector.gmail import sqlite_index
 from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
 
 
@@ -17,6 +18,13 @@ def test_gmail_models_remain_import_compatible() -> None:
     assert google_mail.MailboxStats is MailboxStats
     assert google_mail.SearchResult is SearchResult
     assert google_mail.IndexStats is IndexStats
+
+
+def test_gmail_sqlite_service_remains_import_compatible() -> None:
+    assert google_mail.open_database is sqlite_index.open_database
+    assert google_mail.index_mbox is sqlite_index.index_mbox
+    assert google_mail.write_index_metadata is sqlite_index.write_index_metadata
+    assert google_mail.load_metadata is sqlite_index.load_metadata
 
 
 def test_google_mail_script_help_works_without_installed_package() -> None:
@@ -90,9 +98,9 @@ def test_gmail_sqlite_index_search_and_show_round_trip(tmp_path, capsys) -> None
     index_path = tmp_path / "gmail.sqlite"
     progress_calls: list[tuple[int, int, int]] = []
 
-    conn = google_mail.open_database(index_path, force=False)
+    conn = sqlite_index.open_database(index_path, force=False)
     try:
-        message_count, stats = google_mail.index_mbox(
+        message_count, stats = sqlite_index.index_mbox(
             GMAIL_MBOX,
             conn,
             max_body_chars=10_000,
@@ -101,7 +109,13 @@ def test_gmail_sqlite_index_search_and_show_round_trip(tmp_path, capsys) -> None
                 (count, current, total)
             ),
         )
-        google_mail.write_index_metadata(conn, GMAIL_MBOX, message_count, 10_000, stats)
+        sqlite_index.write_index_metadata(
+            conn,
+            GMAIL_MBOX,
+            message_count,
+            10_000,
+            stats,
+        )
         conn.commit()
     finally:
         conn.close()
