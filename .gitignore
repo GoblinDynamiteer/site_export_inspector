@@ -11,3 +11,4 @@ gmail_index.sqlite-*
 .idea/
 *.egg-info/
 uv.lock
+*.csv
