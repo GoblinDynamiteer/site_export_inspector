@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
 
-from export_inspector.gmail._message import (
+from export_inspector.gmail.mbox import (
     choose_text_candidate,
     consume_body_line,
     decode_header_value,
