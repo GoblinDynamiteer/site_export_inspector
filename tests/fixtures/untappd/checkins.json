@@ -1,0 +1,12 @@
+[
+  {
+    "created_at": "2022-01-01 19:30:00",
+    "checkin_id": 101,
+    "beer_name": "Sample Pale Ale",
+    "brewery_name": "Example Brewery",
+    "beer_type": "Pale Ale",
+    "rating_score": "4.0",
+    "venue_name": "Example Taproom",
+    "comment": "Crisp sample check-in"
+  }
+]

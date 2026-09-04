@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="export-inspector-test" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Running sample</name>
+    <trkseg>
+      <trkpt lat="59.3293" lon="18.0686">
+        <ele>10.0</ele>
+        <time>2022-01-01T10:00:00Z</time>
+      </trkpt>
+      <trkpt lat="59.3300" lon="18.0700">
+        <ele>14.0</ele>
+        <time>2022-01-01T10:05:00Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
