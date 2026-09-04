@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import Callable, Iterable
 from zoneinfo import ZoneInfo
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
 
 

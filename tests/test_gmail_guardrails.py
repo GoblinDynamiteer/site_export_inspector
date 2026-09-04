@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -15,6 +17,21 @@ def test_gmail_models_remain_import_compatible() -> None:
     assert google_mail.MailboxStats is MailboxStats
     assert google_mail.SearchResult is SearchResult
     assert google_mail.IndexStats is IndexStats
+
+
+def test_google_mail_script_help_works_without_installed_package() -> None:
+    script_path = Path(google_mail.__file__).resolve()
+
+    result = subprocess.run(
+        [sys.executable, "-S", str(script_path), "--help"],
+        cwd="/tmp",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Inspect, search, and index Gmail" in result.stdout
 
 
 def search_args(input_file: Path, terms: list[str] | None = None, **overrides) -> Namespace:
