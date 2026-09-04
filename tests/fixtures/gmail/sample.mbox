@@ -1,0 +1,27 @@
+From alice@example.com Sat Jan  1 10:00:00 2022
+Date: Sat, 01 Jan 2022 10:00:00 +0000
+From: Alice Example <alice@example.com>
+To: Bob Example <bob@example.com>
+Subject: Hiking Plans
+X-Gmail-Labels: Inbox
+X-GM-THRID: 1001
+X-GM-MSGID: 2001
+Message-ID: <sample-one@example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Hello Bob,
+The trail schedule includes fika near the overlook.
+
+From bob@example.com Sun Jan  2 11:30:00 2022
+Date: Sun, 02 Jan 2022 11:30:00 +0000
+From: Bob Example <bob@example.com>
+To: Alice Example <alice@example.com>
+Subject: Re: Hiking Plans
+X-Gmail-Labels: Sent
+X-GM-THRID: 1001
+X-GM-MSGID: 2002
+Message-ID: <sample-two@example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Works for me.
+I will bring coffee and a printed route.

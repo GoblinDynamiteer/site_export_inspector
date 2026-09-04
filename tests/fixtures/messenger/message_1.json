@@ -1,0 +1,18 @@
+{
+  "participants": [
+    {"name": "Alice Example"},
+    {"name": "Bob Example"}
+  ],
+  "messages": [
+    {
+      "sender_name": "Alice Example",
+      "timestamp_ms": 1641031200000,
+      "content": "Sample trail plan"
+    },
+    {
+      "sender_name": "Bob Example",
+      "timestamp_ms": 1641034800000,
+      "content": "Confirmed"
+    }
+  ]
+}
