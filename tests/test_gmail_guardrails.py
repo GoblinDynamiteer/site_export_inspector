@@ -4,10 +4,17 @@ from argparse import Namespace
 from pathlib import Path
 
 from export_inspector import google_mail
+from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GMAIL_MBOX = FIXTURES / "gmail" / "sample.mbox"
+
+
+def test_gmail_models_remain_import_compatible() -> None:
+    assert google_mail.MailboxStats is MailboxStats
+    assert google_mail.SearchResult is SearchResult
+    assert google_mail.IndexStats is IndexStats
 
 
 def search_args(input_file: Path, terms: list[str] | None = None, **overrides) -> Namespace:
