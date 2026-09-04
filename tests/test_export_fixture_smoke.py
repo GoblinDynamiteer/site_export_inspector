@@ -27,6 +27,7 @@ def test_untappd_fixture_loads_json_array() -> None:
 
     assert len(entries) == 1
     assert entries[0]["beer_name"] == "Sample Pale Ale"
+    assert untappd.parse_created_at(entries[0]["created_at"]).year == 2022
     assert untappd.display_rating(entries[0]) == "4"
 
 
@@ -42,5 +43,5 @@ def test_runkeeper_fixture_loads_zip_export(tmp_path) -> None:
     assert len(activities) == 1
     assert activities[0].name == "Running sample"
     assert activities[0].point_count == 2
-    assert measurements[0]["type"] == "weight"
+    assert measurements[0]["Type"] == "Weight"
     assert photos[0]["uri"] == "photos/sample.jpg"
