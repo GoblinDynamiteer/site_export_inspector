@@ -6,6 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from export_inspector import google_mail
+from export_inspector.gmail import mbox
 from export_inspector.gmail import sqlite_index
 from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
 
@@ -25,6 +26,14 @@ def test_gmail_sqlite_service_remains_import_compatible() -> None:
     assert google_mail.index_mbox is sqlite_index.index_mbox
     assert google_mail.write_index_metadata is sqlite_index.write_index_metadata
     assert google_mail.load_metadata is sqlite_index.load_metadata
+
+
+def test_gmail_mbox_service_remains_import_compatible() -> None:
+    assert google_mail.scan_mbox_info is mbox.scan_mbox_info
+    assert google_mail.search_mbox is mbox.search_mbox
+    assert google_mail.load_message_from_mbox is mbox.load_message_from_mbox
+    assert google_mail.load_message_from_offset is mbox.load_message_from_offset
+    assert google_mail.parse_headers is mbox.parse_headers
 
 
 def test_google_mail_script_help_works_without_installed_package() -> None:
@@ -64,7 +73,7 @@ def search_args(input_file: Path, terms: list[str] | None = None, **overrides) -
 
 
 def test_scan_mbox_info_reads_synthetic_gmail_fixture() -> None:
-    stats, sender_counts, recipient_counts, subject_counts = google_mail.scan_mbox_info(
+    stats, sender_counts, recipient_counts, subject_counts = mbox.scan_mbox_info(
         GMAIL_MBOX,
         show_progress=False,
     )
@@ -78,7 +87,7 @@ def test_scan_mbox_info_reads_synthetic_gmail_fixture() -> None:
 
 
 def test_raw_mbox_search_filters_and_returns_message_indexes() -> None:
-    results = google_mail.search_mbox(
+    results = mbox.search_mbox(
         search_args(
             GMAIL_MBOX,
             ["fika"],
@@ -92,6 +101,17 @@ def test_raw_mbox_search_filters_and_returns_message_indexes() -> None:
     assert results[0].sender == "Alice Example <alice@example.com>"
     assert results[0].subject == "Hiking Plans"
     assert "fika" in results[0].snippet
+
+
+def test_gmail_mbox_message_loader_reads_decoded_body() -> None:
+    headers, body_text = mbox.load_message_from_mbox(
+        GMAIL_MBOX,
+        target_index=2,
+        show_progress=False,
+    )
+
+    assert headers["subject"] == "Re: Hiking Plans"
+    assert "I will bring coffee" in body_text
 
 
 def test_gmail_sqlite_index_search_and_show_round_trip(tmp_path, capsys) -> None:
