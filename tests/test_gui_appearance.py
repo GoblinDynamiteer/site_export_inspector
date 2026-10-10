@@ -1,24 +1,14 @@
 from __future__ import annotations
 
-import os
-
 import pytest
+from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTableView
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtCore import QSettings  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTableView  # noqa: E402
-
-from export_inspector import gui  # noqa: E402
+from export_inspector import gui
 
 
 @pytest.fixture
-def app(tmp_path):
-    QSettings.setPath(QSettings.NativeFormat, QSettings.UserScope, str(tmp_path))
-    application = QApplication.instance() or QApplication([])
-    original = gui.system_font()
-    yield application
-    QApplication.setFont(original)
+def app(qt_app):
+    return qt_app
 
 
 def test_load_appearance_defaults_and_clamps(app) -> None:
