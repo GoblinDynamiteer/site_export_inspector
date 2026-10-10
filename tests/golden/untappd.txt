@@ -1,0 +1,356 @@
+== status
+5/5
+
+== check-ins table
+Date | Check-in | Brewery | Beer | ABV | Type | Rating | Had
+2022-04-01 17:45 | 5 | Fixture Ales | Example Sour | 4.5% | Sour | 3.5 | 1
+2022-03-11 21:00 | 4 | Demo Brewing Co. | Mock Lager | 0.0% | Lager | - | 1
+2022-03-10 20:15 | 3 | Demo Brewing Co. | Test Stout | 8.0% | Stout - Imperial | 4.25 | 1
+2022-02-05 18:00 | 2 | Example Brewery | Sample Pale Ale | 5.2% | Pale Ale | 3.75 | 2
+2022-01-01 19:30 | 1 | Example Brewery | Sample Pale Ale | 5.2% | Pale Ale | 4 | 1
+
+== check-ins detail 0
+Beer: Example Sour
+Brewery: Fixture Ales
+Type: Sour
+Check-in: 5
+Total had with this check-in: 1
+Total Had: 1
+Your rating: 3.5
+ABV: 4.5
+Created at: 2022-04-01 17:45:00
+Venue: Example Taproom
+Venue city: Stockholm
+Venue country: Sweden
+Check-in ID: 105
+Beer ID: 13
+
+== check-ins detail 1
+Beer: Mock Lager
+Brewery: Demo Brewing Co.
+Type: Lager
+Check-in: 4
+Total had with this check-in: 1
+Total Had: 1
+ABV: 0
+Created at: 2022-03-11 21:00:00
+Brewery country: Norway
+Check-in ID: 104
+Brewery ID: 502
+
+== check-ins detail 2
+Beer: Test Stout
+Brewery: Demo Brewing Co.
+Type: Stout - Imperial
+Check-in: 3
+Total had with this check-in: 1
+Total Had: 1
+Your rating: 4.25
+ABV: 8.0
+IBU: 60
+Created at: 2022-03-10 20:15:00
+Purchase venue: Example Bottle Shop
+Brewery country: Norway
+Check-in ID: 103
+Beer ID: 12
+Brewery ID: 502
+
+== check-ins detail 3
+Beer: Sample Pale Ale
+Brewery: Example Brewery
+Type: Pale Ale
+Check-in: 2
+Total had with this check-in: 2
+Total Had: 2
+Your rating: 3.75
+ABV: 5.2
+Created at: 2022-02-05 18:00:00
+Venue: Example Taproom
+Venue city: Stockholm
+Venue country: Sweden
+Serving type: Can
+Brewery country: Sweden
+Check-in ID: 102
+Beer ID: 11
+Brewery ID: 501
+
+Had dates:
+2022-02-05 18:00:00
+2022-01-01 19:30:00
+
+== check-ins detail 4
+Beer: Sample Pale Ale
+Brewery: Example Brewery
+Type: Pale Ale
+Check-in: 1
+Total had with this check-in: 1
+Total Had: 2
+Your rating: 4.0
+Global rating: 3.71
+Weighted global rating: 3.70
+ABV: 5.2
+IBU: 35
+Created at: 2022-01-01 19:30:00
+Venue: Example Taproom
+Venue city: Stockholm
+Venue country: Sweden
+Serving type: Draft
+Toasts: 2
+Brewery country: Sweden
+Check-in ID: 101
+Beer ID: 11
+Brewery ID: 501
+
+Comment:
+Crisp sample check-in
+
+Had dates:
+2022-02-05 18:00:00
+2022-01-01 19:30:00
+
+== beers table
+Brewery | Beer | Date First Had | Date Latest Had | ABV | Type | Rating | Total Had
+Fixture Ales | Example Sour | 2022-04-01 17:45 | 2022-04-01 17:45 | 4.5% | Sour | 3.5 | 1
+Demo Brewing Co. | Mock Lager | 2022-03-11 21:00 | 2022-03-11 21:00 | 0.0% | Lager | - | 1
+Demo Brewing Co. | Test Stout | 2022-03-10 20:15 | 2022-03-10 20:15 | 8.0% | Stout - Imperial | 4.25 | 1
+Example Brewery | Sample Pale Ale | 2022-01-01 19:30 | 2022-02-05 18:00 | 5.2% | Pale Ale | 3.88 | 2
+
+== beers detail 0
+Beer: Example Sour
+Brewery: Fixture Ales
+Type: Sour
+ABV: 4.5%
+IBU: -
+Average rating: 3.5
+Rated check-ins: 1
+Total Had: 1
+Date First Had: 2022-04-01 17:45
+Date Latest Had: 2022-04-01 17:45
+
+Top venues:
+1  Example Taproom
+
+Check-ins:
+2022-04-01 17:45:00 | venue=Example Taproom | rating=3.5 | check-in=5 | had=1
+
+== beers detail 1
+Beer: Mock Lager
+Brewery: Demo Brewing Co.
+Type: Lager
+ABV: 0.0%
+IBU: -
+Average rating: -
+Rated check-ins: 0
+Total Had: 1
+Date First Had: 2022-03-11 21:00
+Date Latest Had: 2022-03-11 21:00
+Brewery country: Norway
+
+Top venues:
+1  -
+
+Check-ins:
+2022-03-11 21:00:00 | venue=- | rating=- | check-in=4 | had=1
+
+== beers detail 2
+Beer: Test Stout
+Brewery: Demo Brewing Co.
+Type: Stout - Imperial
+ABV: 8.0%
+IBU: 60
+Average rating: 4.25
+Rated check-ins: 1
+Total Had: 1
+Date First Had: 2022-03-10 20:15
+Date Latest Had: 2022-03-10 20:15
+Brewery country: Norway
+
+Top venues:
+1  Example Bottle Shop
+
+Check-ins:
+2022-03-10 20:15:00 | venue=Example Bottle Shop | rating=4.25 | check-in=3 | had=1
+
+== beers detail 3
+Beer: Sample Pale Ale
+Brewery: Example Brewery
+Type: Pale Ale
+ABV: 5.2%
+IBU: 35
+Average rating: 3.88
+Rated check-ins: 2
+Total Had: 2
+Date First Had: 2022-01-01 19:30
+Date Latest Had: 2022-02-05 18:00
+Global rating: 3.71
+Weighted global rating: 3.70
+Brewery country: Sweden
+
+Top venues:
+2  Example Taproom
+
+Check-ins:
+2022-02-05 18:00:00 | venue=Example Taproom | rating=3.75 | check-in=2 | had=2 | serving=Can
+2022-01-01 19:30:00 | venue=Example Taproom | rating=4 | check-in=1 | had=1 | serving=Draft | toasts=2 | comment=Crisp sample check-in
+
+== breweries table
+Brewery | Country | Date First Had | Date Latest Had | Rating | Unique Beers | Total Had
+Fixture Ales | - | 2022-04-01 17:45 | 2022-04-01 17:45 | 3.5 | 1 | 1
+Demo Brewing Co. | Norway | 2022-03-10 20:15 | 2022-03-11 21:00 | 4.25 | 2 | 2
+Example Brewery | Sweden | 2022-01-01 19:30 | 2022-02-05 18:00 | 3.88 | 1 | 2
+
+== breweries detail 0
+Brewery: Fixture Ales
+City: -
+State: -
+Country: -
+Average rating: 3.5
+Rated check-ins: 1
+Unique beers: 1
+Total Had: 1
+Date First Had: 2022-04-01 17:45
+Date Latest Had: 2022-04-01 17:45
+
+Top beers:
+1  Example Sour
+
+Top styles:
+1  Sour
+
+Top venues:
+1  Example Taproom
+
+Check-ins:
+2022-04-01 17:45:00 | beer=Example Sour | brewery=Fixture Ales | venue=Example Taproom | rating=3.5 | check-in=5 | had=1
+
+== breweries detail 1
+Brewery: Demo Brewing Co.
+City: -
+State: -
+Country: Norway
+Average rating: 4.25
+Rated check-ins: 1
+Unique beers: 2
+Total Had: 2
+Date First Had: 2022-03-10 20:15
+Date Latest Had: 2022-03-11 21:00
+
+Top beers:
+1  Mock Lager
+1  Test Stout
+
+Top styles:
+1  Lager
+1  Stout - Imperial
+
+Top venues:
+1  -
+1  Example Bottle Shop
+
+Check-ins:
+2022-03-11 21:00:00 | beer=Mock Lager | brewery=Demo Brewing Co. | venue=- | rating=- | check-in=4 | had=1
+2022-03-10 20:15:00 | beer=Test Stout | brewery=Demo Brewing Co. | venue=Example Bottle Shop | rating=4.25 | check-in=3 | had=1
+
+== breweries detail 2
+Brewery: Example Brewery
+City: -
+State: -
+Country: Sweden
+Average rating: 3.88
+Rated check-ins: 2
+Unique beers: 1
+Total Had: 2
+Date First Had: 2022-01-01 19:30
+Date Latest Had: 2022-02-05 18:00
+
+Top beers:
+2  Sample Pale Ale
+
+Top styles:
+2  Pale Ale
+
+Top venues:
+2  Example Taproom
+
+Check-ins:
+2022-02-05 18:00:00 | beer=Sample Pale Ale | brewery=Example Brewery | venue=Example Taproom | rating=3.75 | check-in=2 | had=2 | serving=Can
+2022-01-01 19:30:00 | beer=Sample Pale Ale | brewery=Example Brewery | venue=Example Taproom | rating=4 | check-in=1 | had=1 | serving=Draft | toasts=2 | comment=Crisp sample check-in
+
+== venues table
+Venue | City | Country | Date First Had | Date Latest Had | Rating | Unique Beers | Total Had
+Example Taproom | Stockholm | Sweden | 2022-01-01 19:30 | 2022-04-01 17:45 | 3.75 | 2 | 3
+Example Bottle Shop | - | - | 2022-03-10 20:15 | 2022-03-10 20:15 | 4.25 | 1 | 1
+
+== venues detail 0
+Venue: Example Taproom
+City: Stockholm
+State: -
+Country: Sweden
+Average rating: 3.75
+Rated check-ins: 3
+Unique beers: 2
+Unique breweries: 2
+Total Had: 3
+Date First Had: 2022-01-01 19:30
+Date Latest Had: 2022-04-01 17:45
+
+Top beers:
+2  Sample Pale Ale
+1  Example Sour
+
+Top breweries:
+2  Example Brewery
+1  Fixture Ales
+
+Top styles:
+2  Pale Ale
+1  Sour
+
+Check-ins:
+2022-04-01 17:45:00 | beer=Example Sour | brewery=Fixture Ales | venue=Example Taproom | rating=3.5 | check-in=5 | had=1
+2022-02-05 18:00:00 | beer=Sample Pale Ale | brewery=Example Brewery | venue=Example Taproom | rating=3.75 | check-in=2 | had=2 | serving=Can
+2022-01-01 19:30:00 | beer=Sample Pale Ale | brewery=Example Brewery | venue=Example Taproom | rating=4 | check-in=1 | had=1 | serving=Draft | toasts=2 | comment=Crisp sample check-in
+
+== venues detail 1
+Venue: Example Bottle Shop
+City: -
+State: -
+Country: -
+Average rating: 4.25
+Rated check-ins: 1
+Unique beers: 1
+Unique breweries: 1
+Total Had: 1
+Date First Had: 2022-03-10 20:15
+Date Latest Had: 2022-03-10 20:15
+
+Top beers:
+1  Test Stout
+
+Top breweries:
+1  Demo Brewing Co.
+
+Top styles:
+1  Stout - Imperial
+
+Check-ins:
+2022-03-10 20:15:00 | beer=Test Stout | brewery=Demo Brewing Co. | venue=Example Bottle Shop | rating=4.25 | check-in=3 | had=1
+
+== check-ins filtered 'stout'
+Date | Check-in | Brewery | Beer | ABV | Type | Rating | Had
+2022-03-10 20:15 | 3 | Demo Brewing Co. | Test Stout | 8.0% | Stout - Imperial | 4.25 | 1
+
+== beers filtered 'stout'
+Brewery | Beer | Date First Had | Date Latest Had | ABV | Type | Rating | Total Had
+Demo Brewing Co. | Test Stout | 2022-03-10 20:15 | 2022-03-10 20:15 | 8.0% | Stout - Imperial | 4.25 | 1
+
+== breweries filtered 'stout'
+Brewery | Country | Date First Had | Date Latest Had | Rating | Unique Beers | Total Had
+Demo Brewing Co. | Norway | 2022-03-10 20:15 | 2022-03-11 21:00 | 4.25 | 2 | 2
+
+== venues filtered 'stout'
+Venue | City | Country | Date First Had | Date Latest Had | Rating | Unique Beers | Total Had
+Example Bottle Shop | - | - | 2022-03-10 20:15 | 2022-03-10 20:15 | 4.25 | 1 | 1
+
+== status after filters
+5/5

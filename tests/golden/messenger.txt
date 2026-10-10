@@ -1,0 +1,45 @@
+== status
+Showing 2 of 2 matching messages
+
+== threads
+Alice Example / Bob Example  (1 source)
+Alice Example / Carol Example  (1 source)
+
+== thread 0 info
+Files: 1
+Participants: Alice Example / Bob Example
+Messages: 2
+
+== thread 0 status
+Showing 2 of 2 matching messages
+
+== thread 0 messages
+2022-01-01 11:00:00  Alice Example
+  Sample trail plan
+
+2022-01-01 12:00:00  Bob Example
+  Confirmed
+
+== thread 1 info
+Files: 1
+Participants: Alice Example / Carol Example
+Messages: 2
+
+== thread 1 status
+Showing 2 of 2 matching messages
+
+== thread 1 messages
+2022-01-03 09:53:20  Carol Example
+  Morning coffee?
+
+[Gap: 11 hours 6 minutes 40 seconds]
+
+2022-01-03 21:00:00  Alice Example
+  Sorry, saw this late
+
+== filtered status
+Showing 1 of 1 matching messages
+
+== filtered messages
+2022-01-01 12:00:00  Bob Example
+  Confirmed

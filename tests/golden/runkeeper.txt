@@ -1,0 +1,151 @@
+== status
+2/2
+
+== table
+Started | Type | Duration | Distance
+2022-01-03 19:00 | Running | 9:00 | 1.35 km
+2022-01-01 11:00 | Running | 5:00 | 0.11 km
+
+== detail 0
+Name: Running evening sample
+File: evening.gpx
+Type: Running
+Started: 2022-01-03 19:00:00
+Finished: 2022-01-03 19:09:00
+Duration: 9:00 (1st longest Running duration)
+Distance: 1.35 km (1st longest Running distance)
+Pace: 6:39 /km
+Speed: 9.03 km/h
+Elevation gain: 5 m
+Track points: 3
+Start: 59.329300, 18.068600
+End: 59.340000, 18.080000
+Archive: <TMP>/runkeeper-export.zip
+Photo entries in loaded export data: 1
+Photo note: photos.csv uses activity UUIDs that are not exposed in the GPX file names.
+
+== detail 1
+Name: Running sample
+File: activity.gpx
+Type: Running
+Started: 2022-01-01 11:00:00
+Finished: 2022-01-01 11:05:00
+Duration: 5:00 (2nd longest Running duration)
+Distance: 0.11 km (2nd longest Running distance)
+Pace: 44:58 /km
+Speed: 1.33 km/h
+Elevation gain: 4 m
+Track points: 2
+Start: 59.329300, 18.068600
+End: 59.330000, 18.070000
+Archive: <TMP>/runkeeper-export.zip
+Photo entries in loaded export data: 1
+Photo note: photos.csv uses activity UUIDs that are not exposed in the GPX file names.
+
+== filtered status
+1/2
+
+== filtered table
+Started | Type | Duration | Distance
+2022-01-03 19:00 | Running | 9:00 | 1.35 km
+
+== map html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  >
+  <style>
+    html, body, #map {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      background: #f6f3ec;
+      font-family: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    #map {
+      min-height: 320px;
+    }
+    .summary {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      z-index: 700;
+      max-width: min(340px, calc(100% - 24px));
+      padding: 10px 12px;
+      border: 1px solid rgba(20, 33, 61, 0.12);
+      border-radius: 6px;
+      background: rgba(255, 252, 246, 0.94);
+      box-shadow: 0 10px 24px rgba(20, 33, 61, 0.12);
+      color: #14213d;
+    }
+    .title {
+      margin: 0 0 4px;
+      font-weight: 700;
+      font-size: 14px;
+      line-height: 1.25;
+    }
+    .meta {
+      margin: 0;
+      color: #5f6b7a;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="summary">
+    <p class="title">Running evening sample</p>
+    <p class="meta">Running · 2022-01-03 19:00:00</p>
+  </div>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    const route = [[59.3293,18.0686],[59.335,18.075],[59.34,18.08]];
+    const map = L.map("map", {
+      zoomControl: true,
+      attributionControl: true
+    });
+
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors &copy; CARTO"
+    }).addTo(map);
+
+    const routeLine = L.polyline(route, {
+      color: "#d1495b",
+      weight: 5,
+      opacity: 0.9
+    }).addTo(map);
+
+    L.circleMarker(route[0], {
+      radius: 7,
+      color: "#ffffff",
+      weight: 2,
+      fillColor: "#2a9d8f",
+      fillOpacity: 1
+    }).addTo(map).bindPopup("Start");
+
+    L.circleMarker(route[route.length - 1], {
+      radius: 7,
+      color: "#ffffff",
+      weight: 2,
+      fillColor: "#d1495b",
+      fillOpacity: 1
+    }).addTo(map).bindPopup("End");
+
+    map.fitBounds(routeLine.getBounds(), { padding: [24, 24] });
+  </script>
+</body>
+</html>

@@ -90,7 +90,8 @@ def line_edit(placeholder: str = "", text: str = "") -> QLineEdit:
 
 
 def app_settings() -> QSettings:
-    return QSettings(SETTINGS_ORG, SETTINGS_APP)
+    # defaultFormat() is NativeFormat unless changed, which tests do to isolate settings.
+    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, SETTINGS_ORG, SETTINGS_APP)
 
 
 def settings_text(key: str, default: str = "") -> str:
