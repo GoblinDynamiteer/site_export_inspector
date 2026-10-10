@@ -52,7 +52,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QListWidget,
     QMainWindow,
     QMessageBox,
@@ -69,51 +68,18 @@ from PySide6.QtWidgets import (
 )
 
 from export_inspector import google_mail, messenger_chat, runkeeper, untappd
-
-
-DEFAULT_TIMEZONE = "Europe/Stockholm"
-SETTINGS_ORG = "jk"
-SETTINGS_APP = "export_inspector"
+from export_inspector.gui.common import (
+    DEFAULT_TIMEZONE,
+    app_settings,
+    dialog_start_path,
+    line_edit,
+    remember_text,
+    settings_text,
+)
 
 
 def iso_date(date_edit: QDateEdit) -> str:
     return date_edit.date().toString("yyyy-MM-dd")
-
-
-def line_edit(placeholder: str = "", text: str = "") -> QLineEdit:
-    widget = QLineEdit()
-    widget.setPlaceholderText(placeholder)
-    if text:
-        widget.setText(text)
-    return widget
-
-
-def app_settings() -> QSettings:
-    # defaultFormat() is NativeFormat unless changed, which tests do to isolate settings.
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, SETTINGS_ORG, SETTINGS_APP)
-
-
-def settings_text(key: str, default: str = "") -> str:
-    value = app_settings().value(key, default)
-    return str(value) if value is not None else default
-
-
-def remember_text(key: str, value: str) -> None:
-    text = value.strip()
-    if text:
-        app_settings().setValue(key, text)
-
-
-def dialog_start_path(key: str, fallback: str = "") -> str:
-    saved = settings_text(key, fallback).strip()
-    if not saved:
-        return ""
-    path = Path(saved).expanduser()
-    if path.is_dir():
-        return str(path)
-    if path.parent.exists():
-        return str(path.parent)
-    return fallback
 
 
 TEXT_SCALE_DEFAULT = 100

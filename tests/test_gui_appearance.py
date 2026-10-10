@@ -4,6 +4,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTableView
 
 from export_inspector import gui
+from export_inspector.gui import common
 
 
 @pytest.fixture
@@ -14,7 +15,7 @@ def app(qt_app):
 def test_load_appearance_defaults_and_clamps(app) -> None:
     assert gui.load_appearance() == gui.AppearanceSettings()
 
-    settings = gui.app_settings()
+    settings = common.app_settings()
     settings.setValue("appearance/text_scale", 999)
     settings.setValue("appearance/detail_point_size", "not a number")
     settings.setValue("appearance/detail_family", "DejaVu Sans Mono")
