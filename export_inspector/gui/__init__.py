@@ -71,7 +71,6 @@ from PySide6.QtWidgets import (
 from export_inspector import google_mail, messenger_chat, runkeeper, untappd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TIMEZONE = "Europe/Stockholm"
 SETTINGS_ORG = "jk"
 SETTINGS_APP = "export_inspector"
