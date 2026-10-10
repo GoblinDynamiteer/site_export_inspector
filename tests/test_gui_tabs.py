@@ -19,6 +19,7 @@ from PySide6.QtCore import QElapsedTimer
 from PySide6.QtWidgets import QApplication, QFileDialog, QTabWidget, QWidget
 
 from export_inspector import google_mail, gui
+from export_inspector.gui import common
 from tests.gui_snapshot import FIXTURES, Snapshot, each_row_detail
 
 TAB_TITLES = ["Messenger", "Google Mail", "Untappd", "Runkeeper"]
@@ -251,5 +252,5 @@ def test_loading_remembers_input_paths(window, tmp_path) -> None:
     gmail.path_edit.setText(str(FIXTURES / "gmail" / "sample.mbox"))
     gmail.load_mail()
 
-    assert gui.settings_text("untappd/input_path") == str(FIXTURES / "untappd" / "checkins_multi.json")
-    assert gui.settings_text("google_mail/input_path") == str(FIXTURES / "gmail" / "sample.mbox")
+    assert common.settings_text("untappd/input_path") == str(FIXTURES / "untappd" / "checkins_multi.json")
+    assert common.settings_text("google_mail/input_path") == str(FIXTURES / "gmail" / "sample.mbox")

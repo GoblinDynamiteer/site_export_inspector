@@ -39,12 +39,13 @@ def qt_app(tmp_path):
     Windows and macOS the tests would otherwise touch the real registry/preferences.
     """
     from export_inspector import gui
+    from export_inspector.gui import common
 
     settings_dir = tmp_path / "settings"
     previous_format = QSettings.defaultFormat()
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(settings_dir))
-    assert gui.app_settings().fileName().startswith(str(settings_dir))
+    assert common.app_settings().fileName().startswith(str(settings_dir))
     application = QApplication.instance() or QApplication([])
     original = gui.system_font()
     yield application
