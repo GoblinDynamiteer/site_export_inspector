@@ -7,7 +7,6 @@ import pytest
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTableView
 
-from export_inspector import gui
 from export_inspector.gui import appearance, common
 from export_inspector.gui.appearance import (
     TEXT_SCALE_DEFAULT,
@@ -23,6 +22,7 @@ from export_inspector.gui.appearance import (
     system_font,
     use_detail_font,
 )
+from export_inspector.gui.main_window import MainWindow
 from export_inspector.gui.settings_dialog import SettingsDialog
 
 
@@ -118,7 +118,7 @@ def test_settings_dialog_apply_saves_and_applies(app) -> None:
 
 
 def test_main_window_text_scale_steps(app) -> None:
-    window = gui.MainWindow()
+    window = MainWindow()
 
     window.step_text_scale(TEXT_SCALE_STEP)
     assert load_appearance().text_scale == TEXT_SCALE_DEFAULT + TEXT_SCALE_STEP
