@@ -29,7 +29,7 @@ from export_inspector.gui.common import (
 )
 
 if TYPE_CHECKING:
-    from export_inspector.gui import GoogleMailTab
+    from export_inspector.gui.mail.tab import GoogleMailTab
 
 
 @dataclass
