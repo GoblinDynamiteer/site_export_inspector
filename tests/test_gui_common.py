@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QDate
 
-from export_inspector import gui
 from export_inspector.gui import common
 from export_inspector.gui.messenger import tab as messenger_tab
+from export_inspector.gui.runkeeper import tab as runkeeper_tab
 
 
 def test_settings_constants_and_location(qt_app, tmp_path) -> None:
@@ -90,7 +90,7 @@ def test_date_controls_toggle_and_format(qt_app) -> None:
     ],
 )
 def test_ordinal(value: int, expected: str) -> None:
-    assert gui.ordinal(value) == expected
+    assert runkeeper_tab.ordinal(value) == expected
 
 
 def test_common_does_not_import_other_gui_modules() -> None:
