@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from export_inspector import messenger_chat
+from export_inspector import messenger
+from export_inspector.messenger import search
 from export_inspector.gui.appearance import use_detail_font
 from export_inspector.gui.common import (
     DEFAULT_TIMEZONE,
@@ -49,27 +50,10 @@ def create_date_controls() -> tuple[QCheckBox, QDateEdit]:
     return checkbox, date_edit
 
 
-def messenger_search_blob(message: dict, timezone_name: str) -> str:
-    """Return the lowercased text a filter matches against: sender, content, time,
-    attachments and reactions."""
-    values: list[str] = [
-        messenger_chat.repair_text(message.get("sender_name", "")),
-        messenger_chat.repair_text(message.get("content", "")),
-        messenger_chat.format_swedish_datetime(
-            message["timestamp_ms"], timezone_name
-        ),
-    ]
-    values.extend(messenger_chat.describe_attachment(message))
-    reactions = messenger_chat.describe_reactions(message)
-    if reactions:
-        values.append(reactions)
-    return "\n".join(values).lower()
-
-
 def render_message_block(message: dict, timezone_name: str) -> str:
-    """Render one message as plain text with `messenger_chat.render_message` (no name
+    """Render one message as plain text with `messenger.render_message` (no name
     colours or search highlighting)."""
-    return "\n".join(messenger_chat.render_message(message, timezone_name, {}))
+    return "\n".join(messenger.render_message(message, timezone_name, {}))
 
 
 class MessengerTab(QWidget):
@@ -184,7 +168,7 @@ class MessengerTab(QWidget):
         input_path: str | None = raw_path or None
 
         try:
-            self.available_threads = messenger_chat.discover_threads(input_path)
+            self.available_threads = messenger.discover_threads(input_path)
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
@@ -207,7 +191,7 @@ class MessengerTab(QWidget):
         for signature, sources in self.available_threads:
             self.thread_signatures.append(signature)
             self.thread_list.addItem(
-                f"{messenger_chat.signature_label(signature)}  ({len(sources)} source{'s' if len(sources) != 1 else ''})"
+                f"{messenger.signature_label(signature)}  ({len(sources)} source{'s' if len(sources) != 1 else ''})"
             )
 
         self.status_label.setText(f"Found {len(self.available_threads)} chats.")
@@ -223,7 +207,7 @@ class MessengerTab(QWidget):
 
         try:
             self.messages, self.participants, self.paths = (
-                messenger_chat.load_exports(
+                messenger.load_exports(
                     input_path,
                     target_signature=signature,
                 )
@@ -244,34 +228,20 @@ class MessengerTab(QWidget):
         if not self.from_enabled.isChecked():
             return None
         try:
-            return messenger_chat.parse_from_date(
+            return messenger.parse_from_date(
                 iso_date(self.from_date),
                 self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
             )
         except Exception:
             return None
 
-    def _message_search_blob(self, message: dict) -> str:
-        return messenger_search_blob(
-            message,
+    def filtered_messages(self) -> list[dict]:
+        filtered = search.filter_messages_from(self.messages, self.current_from_timestamp())
+        return search.filter_messages_text(
+            filtered,
+            self.filter_edit.text(),
             self.timezone_edit.text().strip() or DEFAULT_TIMEZONE,
         )
-
-    def filtered_messages(self) -> list[dict]:
-        from_timestamp = self.current_from_timestamp()
-        filtered = messenger_chat.filter_messages_from(
-            self.messages, from_timestamp
-        )
-        query = self.filter_edit.text().strip().lower()
-        if not query:
-            return filtered
-        terms = query.split()
-        matches: list[dict] = []
-        for message in filtered:
-            blob = self._message_search_blob(message)
-            if all(term in blob for term in terms):
-                matches.append(message)
-        return matches
 
     def refresh_messages(self) -> None:
         if not self.messages:
@@ -297,10 +267,10 @@ class MessengerTab(QWidget):
             if (
                 previous_timestamp_ms is not None
                 and current_timestamp - previous_timestamp_ms
-                >= messenger_chat.DEFAULT_GAP_SECONDS * 1000
+                >= messenger.DEFAULT_GAP_SECONDS * 1000
             ):
                 blocks.append(
-                    messenger_chat.format_gap(
+                    messenger.format_gap(
                         previous_timestamp_ms, current_timestamp
                     )
                 )
