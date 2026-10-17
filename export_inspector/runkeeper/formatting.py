@@ -63,3 +63,12 @@ def shorten(text: str, limit: int = 160) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 3] + "..."
+
+
+def ordinal(value: int) -> str:
+    """Return `value` with its English ordinal suffix, e.g. 1st, 12th, 23rd."""
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
