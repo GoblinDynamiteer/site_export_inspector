@@ -5,7 +5,10 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from export_inspector import google_mail
+from export_inspector.gmail import cli as gmail_cli
 from export_inspector.gmail import formatting as gmail_formatting
 from export_inspector.gmail import mbox
 from export_inspector.gmail import search as gmail_search
@@ -48,6 +51,38 @@ def test_gmail_search_and_formatting_remain_import_compatible() -> None:
     assert google_mail.print_results is gmail_formatting.print_results
     assert google_mail.format_full_message is gmail_formatting.format_full_message
     assert google_mail.DEFAULT_MAX_BODY_CHARS == sqlite_index.DEFAULT_MAX_BODY_CHARS
+
+
+def test_gmail_cli_names_remain_import_compatible() -> None:
+    assert google_mail.main is gmail_cli.main
+    assert google_mail.parse_args is gmail_cli.parse_args
+    assert google_mail.handle_show is gmail_cli.handle_show
+    with pytest.raises(AttributeError):
+        google_mail.no_such_name
+
+
+def test_google_mail_import_does_not_load_the_cli() -> None:
+    code = (
+        "import sys\n"
+        "from export_inspector import google_mail\n"
+        "google_mail.detect_sqlite\n"
+        "assert 'export_inspector.gmail.cli' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+@pytest.mark.parametrize(
+    "module", ["export_inspector.gmail", "export_inspector.gmail.cli", "export_inspector.google_mail"]
+)
+def test_gmail_runs_as_module(module: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "-W", "error::RuntimeWarning", "-m", module, "info", str(GMAIL_MBOX), "--no-progress"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.startswith(f"File: {GMAIL_MBOX}\nMessages: 2\n")
+    assert result.stderr == ""
 
 
 def test_google_mail_script_help_works_without_installed_package() -> None:
