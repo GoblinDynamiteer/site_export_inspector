@@ -16,7 +16,7 @@ dependencies = [
 export-inspector = "export_inspector.__main__:main"
 messenger-chat = "export_inspector.messenger_chat:main"
 google-mail = "export_inspector.google_mail:main"
-untappd-export = "export_inspector.untappd:main"
+untappd-export = "export_inspector.untappd.cli:main"
 runkeeper-export = "export_inspector.runkeeper:main"
 
 [tool.setuptools.packages.find]
