@@ -18,6 +18,7 @@ from export_inspector.gmail.mbox import (
 from export_inspector.gmail.models import IndexStats
 
 
+DEFAULT_MAX_BODY_CHARS = 50000
 PROGRESS_EVERY = 10000
 COMMIT_EVERY = 1000
 

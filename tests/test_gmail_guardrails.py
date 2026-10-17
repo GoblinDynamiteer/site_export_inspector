@@ -6,7 +6,9 @@ from argparse import Namespace
 from pathlib import Path
 
 from export_inspector import google_mail
+from export_inspector.gmail import formatting as gmail_formatting
 from export_inspector.gmail import mbox
+from export_inspector.gmail import search as gmail_search
 from export_inspector.gmail import sqlite_index
 from export_inspector.gmail.models import IndexStats, MailboxStats, SearchResult
 
@@ -34,6 +36,18 @@ def test_gmail_mbox_service_remains_import_compatible() -> None:
     assert google_mail.load_message_from_mbox is mbox.load_message_from_mbox
     assert google_mail.load_message_from_offset is mbox.load_message_from_offset
     assert google_mail.parse_headers is mbox.parse_headers
+
+
+def test_gmail_search_and_formatting_remain_import_compatible() -> None:
+    assert google_mail.detect_sqlite is gmail_search.detect_sqlite
+    assert google_mail.load_sqlite_metadata is gmail_search.load_sqlite_metadata
+    assert google_mail.scan_sqlite_info is gmail_search.scan_sqlite_info
+    assert google_mail.build_fts_query is gmail_search.build_fts_query
+    assert google_mail.search_sqlite is gmail_search.search_sqlite
+    assert google_mail.print_info is gmail_formatting.print_info
+    assert google_mail.print_results is gmail_formatting.print_results
+    assert google_mail.format_full_message is gmail_formatting.format_full_message
+    assert google_mail.DEFAULT_MAX_BODY_CHARS == sqlite_index.DEFAULT_MAX_BODY_CHARS
 
 
 def test_google_mail_script_help_works_without_installed_package() -> None:
