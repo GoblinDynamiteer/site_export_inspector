@@ -14,7 +14,7 @@ dependencies = [
 
 [project.scripts]
 export-inspector = "export_inspector.__main__:main"
-messenger-chat = "export_inspector.messenger_chat:main"
+messenger-chat = "export_inspector.messenger.cli:main"
 google-mail = "export_inspector.google_mail:main"
 untappd-export = "export_inspector.untappd.cli:main"
 runkeeper-export = "export_inspector.runkeeper.cli:main"
