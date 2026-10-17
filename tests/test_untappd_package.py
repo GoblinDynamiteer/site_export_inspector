@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from export_inspector import untappd
 from export_inspector.untappd import checkins, cli
 
@@ -43,11 +45,30 @@ def test_untappd_checkins_does_not_import_the_cli_or_qt() -> None:
     assert not {name for name in imported if name and name.startswith(("PySide6", "export_inspector"))}
 
 
-def test_untappd_runs_as_module() -> None:
+def test_untappd_package_import_does_not_load_the_cli() -> None:
+    code = (
+        "import sys\n"
+        "from export_inspector import untappd\n"
+        "import export_inspector.untappd.checkins\n"
+        "assert 'export_inspector.untappd.cli' not in sys.modules\n"
+        "untappd.normalize_text('x')\n"
+        "assert 'export_inspector.untappd.cli' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_untappd_unknown_attribute_raises_attribute_error() -> None:
+    with pytest.raises(AttributeError):
+        untappd.no_such_name
+
+
+@pytest.mark.parametrize("module", ["export_inspector.untappd", "export_inspector.untappd.cli"])
+def test_untappd_runs_as_module(module: str) -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "export_inspector.untappd", "show", str(UNTAPPD_JSON), "1"],
+        [sys.executable, "-W", "error::RuntimeWarning", "-m", module, "show", str(UNTAPPD_JSON), "1"],
         capture_output=True,
         text=True,
         check=True,
     )
     assert result.stdout.startswith("Beer: ")
+    assert result.stderr == ""

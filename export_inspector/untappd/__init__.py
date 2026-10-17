@@ -18,24 +18,37 @@ from export_inspector.untappd.checkins import (
     parse_rating,
     shorten,
 )
-from export_inspector.untappd.cli import (
-    ANSI_HIGHLIGHT,
-    ANSI_RESET,
-    SearchResult,
-    build_result,
-    entry_matches,
-    handle_info,
-    handle_search,
-    handle_show,
-    highlight_text,
-    main,
-    parse_args,
-    print_focus_info,
-    print_multi_focus_info,
-    render_focus_value,
-    sort_results,
-    use_ansi,
+# The CLI names resolve lazily, so importing the package (or `checkins`) does not load
+# `cli`, and `python -m export_inspector.untappd.cli` runs without a runpy warning.
+_CLI_NAMES = frozenset(
+    {
+        "ANSI_HIGHLIGHT",
+        "ANSI_RESET",
+        "SearchResult",
+        "build_result",
+        "entry_matches",
+        "handle_info",
+        "handle_search",
+        "handle_show",
+        "highlight_text",
+        "main",
+        "parse_args",
+        "print_focus_info",
+        "print_multi_focus_info",
+        "render_focus_value",
+        "sort_results",
+        "use_ansi",
+    }
 )
+
+
+def __getattr__(name: str):
+    if name in _CLI_NAMES:
+        from export_inspector.untappd import cli
+
+        return getattr(cli, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ANSI_HIGHLIGHT",
