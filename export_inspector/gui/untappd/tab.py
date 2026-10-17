@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Qt, QUrl
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from export_inspector import untappd
+from export_inspector.untappd import aggregates, details
 from export_inspector.gui.appearance import use_detail_font
 from export_inspector.gui.common import (
     dialog_start_path,
@@ -51,9 +51,7 @@ class UntappdTab(QWidget):
         self.beer_groups: list[dict] = []
         self.brewery_groups: list[dict] = []
         self.venue_groups: list[dict] = []
-        self.had_counts: dict[str, int] = {}
-        self.had_indexes: dict[str, int] = {}
-        self.checkin_indexes: dict[str, int] = {}
+        self.had = aggregates.HadCounts()
         self.selected_entry: dict | None = None
         self.selected_beer: dict | None = None
         self.selected_brewery: dict | None = None
@@ -323,7 +321,7 @@ class UntappdTab(QWidget):
             return
 
         remember_text("untappd/input_path", input_path)
-        self.rebuild_had_counts()
+        self.had = aggregates.HadCounts.from_entries(self.entries)
         self.populate_table()
         self.populate_beer_table()
         self.populate_brewery_table()
@@ -355,37 +353,20 @@ class UntappdTab(QWidget):
             self.selected_venue = None
             self.venue_detail_text.setPlainText("No venues found.")
 
-    def rebuild_had_counts(self) -> None:
-        counts: dict[str, int] = {}
-        indexes: dict[str, int] = {}
-        checkin_indexes: dict[str, int] = {}
-        sorted_entries = sorted(
-            self.entries,
-            key=lambda item: self.entry_created_dt(item) or datetime.min,
-        )
-        for checkin_index, entry in enumerate(sorted_entries, start=1):
-            key = self.beer_key(entry)
-            counts[key] = counts.get(key, 0) + 1
-            indexes[self.entry_key(entry)] = counts[key]
-            checkin_indexes[self.entry_key(entry)] = checkin_index
-        self.had_counts = counts
-        self.had_indexes = indexes
-        self.checkin_indexes = checkin_indexes
-
     def populate_table(self) -> None:
         self.model.removeRows(0, self.model.rowCount())
         for entry in self.entries:
-            created_dt = self.entry_created_dt(entry)
+            created_dt = aggregates.entry_created_dt(entry)
             created_text = created_dt.strftime("%Y-%m-%d %H:%M") if created_dt else "-"
             rating_value = untappd.parse_rating(entry)
-            had_index = self.had_index(entry)
-            checkin_index = self.checkin_index(entry)
+            had_index = self.had.had_index(entry)
+            checkin_index = self.had.checkin_index(entry)
             row = [
                 QStandardItem(created_text),
                 QStandardItem(str(checkin_index)),
                 QStandardItem(untappd.normalize_text(entry.get("brewery_name")) or "-"),
                 QStandardItem(untappd.normalize_text(entry.get("beer_name")) or "-"),
-                QStandardItem(self.abv_table_text(entry)),
+                QStandardItem(aggregates.abv_table_text(entry)),
                 QStandardItem(untappd.normalize_text(entry.get("beer_type")) or "-"),
                 QStandardItem(untappd.display_rating(entry)),
                 QStandardItem(str(had_index)),
@@ -395,12 +376,12 @@ class UntappdTab(QWidget):
                 checkin_index,
                 untappd.normalize_text(entry.get("brewery_name")).lower(),
                 untappd.normalize_text(entry.get("beer_name")).lower(),
-                self.abv_sort_value(entry),
+                aggregates.abv_sort_value(entry),
                 untappd.normalize_text(entry.get("beer_type")).lower(),
                 rating_value if rating_value is not None else -1,
                 had_index,
             ]
-            search_blob = self.entry_search_blob(entry)
+            search_blob = aggregates.entry_search_blob(entry, self.had)
             for column, item in enumerate(row):
                 item.setEditable(False)
                 item.setData(entry, UNTAPPD_ENTRY_ROLE)
@@ -414,7 +395,7 @@ class UntappdTab(QWidget):
         self.status_label.setText(f"{self.proxy_model.rowCount()}/{len(self.entries)}")
 
     def populate_beer_table(self) -> None:
-        self.beer_groups = self.build_beer_groups()
+        self.beer_groups = aggregates.build_beer_groups(self.entries)
         self.beer_model.removeRows(0, self.beer_model.rowCount())
         for group in self.beer_groups:
             first_dt = group["first_dt"]
@@ -426,9 +407,9 @@ class UntappdTab(QWidget):
                 QStandardItem(
                     latest_dt.strftime("%Y-%m-%d %H:%M") if latest_dt else "-"
                 ),
-                QStandardItem(self.abv_table_text(group["entries"][0])),
+                QStandardItem(aggregates.abv_table_text(group["entries"][0])),
                 QStandardItem(group["beer_type"]),
-                QStandardItem(self.mean_rating_text(group["ratings"])),
+                QStandardItem(aggregates.mean_rating_text(group["ratings"])),
                 QStandardItem(str(len(group["entries"]))),
             ]
             sort_values = [
@@ -436,12 +417,12 @@ class UntappdTab(QWidget):
                 group["beer"].lower(),
                 first_dt.timestamp() if first_dt else 0,
                 latest_dt.timestamp() if latest_dt else 0,
-                self.abv_sort_value(group["entries"][0]),
+                aggregates.abv_sort_value(group["entries"][0]),
                 group["beer_type"].lower(),
-                self.mean_rating_value(group["ratings"]),
+                aggregates.mean_rating_value(group["ratings"]),
                 len(group["entries"]),
             ]
-            search_blob = self.beer_search_blob(group)
+            search_blob = aggregates.beer_search_blob(group)
             for column, item in enumerate(row):
                 item.setEditable(False)
                 item.setData(group, UNTAPPD_BEER_ROLE)
@@ -457,7 +438,7 @@ class UntappdTab(QWidget):
         )
 
     def populate_brewery_table(self) -> None:
-        self.brewery_groups = self.build_brewery_groups()
+        self.brewery_groups = aggregates.build_brewery_groups(self.entries)
         self.brewery_model.removeRows(0, self.brewery_model.rowCount())
         for group in self.brewery_groups:
             first_dt = group["first_dt"]
@@ -469,7 +450,7 @@ class UntappdTab(QWidget):
                 QStandardItem(
                     latest_dt.strftime("%Y-%m-%d %H:%M") if latest_dt else "-"
                 ),
-                QStandardItem(self.mean_rating_text(group["ratings"])),
+                QStandardItem(aggregates.mean_rating_text(group["ratings"])),
                 QStandardItem(str(group["unique_beers"])),
                 QStandardItem(str(len(group["entries"]))),
             ]
@@ -478,7 +459,7 @@ class UntappdTab(QWidget):
                 group["country"].lower(),
                 first_dt.timestamp() if first_dt else 0,
                 latest_dt.timestamp() if latest_dt else 0,
-                self.mean_rating_value(group["ratings"]),
+                aggregates.mean_rating_value(group["ratings"]),
                 group["unique_beers"],
                 len(group["entries"]),
             ]
@@ -492,7 +473,7 @@ class UntappdTab(QWidget):
         )
 
     def populate_venue_table(self) -> None:
-        self.venue_groups = self.build_venue_groups()
+        self.venue_groups = aggregates.build_venue_groups(self.entries)
         self.venue_model.removeRows(0, self.venue_model.rowCount())
         for group in self.venue_groups:
             first_dt = group["first_dt"]
@@ -505,7 +486,7 @@ class UntappdTab(QWidget):
                 QStandardItem(
                     latest_dt.strftime("%Y-%m-%d %H:%M") if latest_dt else "-"
                 ),
-                QStandardItem(self.mean_rating_text(group["ratings"])),
+                QStandardItem(aggregates.mean_rating_text(group["ratings"])),
                 QStandardItem(str(group["unique_beers"])),
                 QStandardItem(str(len(group["entries"]))),
             ]
@@ -515,7 +496,7 @@ class UntappdTab(QWidget):
                 group["country"].lower(),
                 first_dt.timestamp() if first_dt else 0,
                 latest_dt.timestamp() if latest_dt else 0,
-                self.mean_rating_value(group["ratings"]),
+                aggregates.mean_rating_value(group["ratings"]),
                 group["unique_beers"],
                 len(group["entries"]),
             ]
@@ -535,7 +516,7 @@ class UntappdTab(QWidget):
         sort_values: list[object],
         group: dict,
     ) -> None:
-        search_blob = self.aggregate_search_blob(group)
+        search_blob = aggregates.aggregate_search_blob(group)
         for column, item in enumerate(row):
             item.setEditable(False)
             item.setData(group, UNTAPPD_BEER_ROLE)
@@ -589,602 +570,19 @@ class UntappdTab(QWidget):
         self.selected_venue = group
         self.render_venue_details(group)
 
-    def beer_key(self, entry: dict) -> str:
-        bid = untappd.normalize_text(entry.get("bid"))
-        if bid:
-            return f"bid:{bid}"
-        beer = untappd.normalize_text(entry.get("beer_name")).lower()
-        brewery = untappd.normalize_text(entry.get("brewery_name")).lower()
-        return f"name:{brewery}|{beer}"
-
-    def brewery_key(self, entry: dict) -> str:
-        brewery_id = untappd.normalize_text(entry.get("brewery_id"))
-        if brewery_id:
-            return f"brewery:{brewery_id}"
-        brewery = untappd.normalize_text(entry.get("brewery_name")).lower()
-        country = untappd.normalize_text(entry.get("brewery_country")).lower()
-        return f"name:{country}|{brewery}"
-
-    def venue_key(self, entry: dict) -> str:
-        venue = untappd.normalize_text(entry.get("venue_name"))
-        purchase_venue = untappd.normalize_text(entry.get("purchase_venue"))
-        if not venue and not purchase_venue:
-            return ""
-        city = untappd.normalize_text(entry.get("venue_city")).lower()
-        country = untappd.normalize_text(entry.get("venue_country")).lower()
-        return f"venue:{country}|{city}|{(venue or purchase_venue).lower()}"
-
-    def entry_key(self, entry: dict) -> str:
-        checkin_id = untappd.normalize_text(entry.get("checkin_id"))
-        if checkin_id:
-            return f"checkin:{checkin_id}"
-        created = untappd.normalize_text(entry.get("created_at"))
-        return f"fallback:{self.beer_key(entry)}|{created}"
-
-    def had_count(self, entry: dict) -> int:
-        return self.had_counts.get(self.beer_key(entry), 0)
-
-    def had_index(self, entry: dict) -> int:
-        return self.had_indexes.get(self.entry_key(entry), 0)
-
-    def checkin_index(self, entry: dict) -> int:
-        return self.checkin_indexes.get(self.entry_key(entry), 0)
-
-    def build_beer_groups(self) -> list[dict]:
-        grouped: dict[str, list[dict]] = {}
-        for entry in self.entries:
-            grouped.setdefault(self.beer_key(entry), []).append(entry)
-
-        groups: list[dict] = []
-        for key, entries in grouped.items():
-            sorted_entries = sorted(
-                entries,
-                key=lambda item: self.entry_created_dt(item) or datetime.min,
-            )
-            first = sorted_entries[0]
-            latest = sorted_entries[-1]
-            ratings = [
-                rating
-                for entry in sorted_entries
-                if (rating := untappd.parse_rating(entry)) is not None
-            ]
-            groups.append(
-                {
-                    "key": key,
-                    "entries": sorted_entries,
-                    "beer": untappd.normalize_text(first.get("beer_name")) or "-",
-                    "brewery": untappd.normalize_text(first.get("brewery_name")) or "-",
-                    "beer_type": untappd.normalize_text(first.get("beer_type")) or "-",
-                    "first_dt": self.entry_created_dt(first),
-                    "latest_dt": self.entry_created_dt(latest),
-                    "ratings": ratings,
-                }
-            )
-        return sorted(
-            groups,
-            key=lambda item: item["latest_dt"] or datetime.min,
-            reverse=True,
-        )
-
-    def build_brewery_groups(self) -> list[dict]:
-        grouped: dict[str, list[dict]] = {}
-        for entry in self.entries:
-            grouped.setdefault(self.brewery_key(entry), []).append(entry)
-
-        groups: list[dict] = []
-        for key, entries in grouped.items():
-            sorted_entries = sorted(
-                entries,
-                key=lambda item: self.entry_created_dt(item) or datetime.min,
-            )
-            first = sorted_entries[0]
-            latest = sorted_entries[-1]
-            ratings = [
-                rating
-                for entry in sorted_entries
-                if (rating := untappd.parse_rating(entry)) is not None
-            ]
-            groups.append(
-                {
-                    "key": key,
-                    "entries": sorted_entries,
-                    "brewery": untappd.normalize_text(first.get("brewery_name")) or "-",
-                    "city": untappd.normalize_text(first.get("brewery_city")) or "-",
-                    "state": untappd.normalize_text(first.get("brewery_state")) or "-",
-                    "country": untappd.normalize_text(first.get("brewery_country"))
-                    or "-",
-                    "first_dt": self.entry_created_dt(first),
-                    "latest_dt": self.entry_created_dt(latest),
-                    "ratings": ratings,
-                    "unique_beers": len({self.beer_key(entry) for entry in entries}),
-                }
-            )
-        return sorted(
-            groups,
-            key=lambda item: item["latest_dt"] or datetime.min,
-            reverse=True,
-        )
-
-    def build_venue_groups(self) -> list[dict]:
-        grouped: dict[str, list[dict]] = {}
-        for entry in self.entries:
-            key = self.venue_key(entry)
-            if key:
-                grouped.setdefault(key, []).append(entry)
-
-        groups: list[dict] = []
-        for key, entries in grouped.items():
-            sorted_entries = sorted(
-                entries,
-                key=lambda item: self.entry_created_dt(item) or datetime.min,
-            )
-            first = sorted_entries[0]
-            latest = sorted_entries[-1]
-            ratings = [
-                rating
-                for entry in sorted_entries
-                if (rating := untappd.parse_rating(entry)) is not None
-            ]
-            groups.append(
-                {
-                    "key": key,
-                    "entries": sorted_entries,
-                    "venue": (
-                        untappd.normalize_text(first.get("venue_name"))
-                        or untappd.normalize_text(first.get("purchase_venue"))
-                        or "-"
-                    ),
-                    "city": untappd.normalize_text(first.get("venue_city")) or "-",
-                    "state": untappd.normalize_text(first.get("venue_state")) or "-",
-                    "country": untappd.normalize_text(first.get("venue_country"))
-                    or "-",
-                    "lat": untappd.normalize_text(first.get("venue_lat")),
-                    "lng": untappd.normalize_text(first.get("venue_lng")),
-                    "first_dt": self.entry_created_dt(first),
-                    "latest_dt": self.entry_created_dt(latest),
-                    "ratings": ratings,
-                    "unique_beers": len({self.beer_key(entry) for entry in entries}),
-                    "unique_breweries": len(
-                        {self.brewery_key(entry) for entry in entries}
-                    ),
-                }
-            )
-        return sorted(
-            groups,
-            key=lambda item: item["latest_dt"] or datetime.min,
-            reverse=True,
-        )
-
-    def mean_rating_value(self, ratings: list[float]) -> float:
-        if not ratings:
-            return -1.0
-        return sum(ratings) / len(ratings)
-
-    def mean_rating_text(self, ratings: list[float]) -> str:
-        if not ratings:
-            return "-"
-        return f"{self.mean_rating_value(ratings):.2f}".rstrip("0").rstrip(".")
-
-    def beer_search_blob(self, group: dict) -> str:
-        fields = [
-            group["brewery"],
-            group["beer"],
-            group["beer_type"],
-            self.abv_table_text(group["entries"][0]),
-            self.mean_rating_text(group["ratings"]),
-            str(len(group["entries"])),
-        ]
-        for entry in group["entries"]:
-            fields.extend(
-                [
-                    untappd.normalize_text(entry.get("created_at")),
-                    untappd.normalize_text(entry.get("venue_name")),
-                    untappd.normalize_text(entry.get("purchase_venue")),
-                    untappd.normalize_text(entry.get("venue_country")),
-                    untappd.normalize_text(entry.get("brewery_country")),
-                    untappd.normalize_text(entry.get("comment")),
-                    untappd.normalize_text(entry.get("flavor_profiles")),
-                ]
-            )
-        return "\n".join(field for field in fields if field)
-
-    def aggregate_search_blob(self, group: dict) -> str:
-        fields = [
-            str(value)
-            for key, value in group.items()
-            if key not in {"entries", "ratings"} and value not in (None, "")
-        ]
-        for entry in group["entries"]:
-            fields.extend(
-                [
-                    untappd.normalize_text(entry.get("created_at")),
-                    untappd.normalize_text(entry.get("beer_name")),
-                    untappd.normalize_text(entry.get("brewery_name")),
-                    untappd.normalize_text(entry.get("beer_type")),
-                    untappd.display_rating(entry),
-                    untappd.normalize_text(entry.get("venue_name")),
-                    untappd.normalize_text(entry.get("purchase_venue")),
-                    untappd.normalize_text(entry.get("comment")),
-                ]
-            )
-        return "\n".join(field for field in fields if field)
-
-    def abv_table_text(self, entry: dict) -> str:
-        abv = untappd.normalize_text(entry.get("beer_abv"))
-        if not abv:
-            return "-"
-        return f"{self.format_abv(abv)}%"
-
-    def format_abv(self, value: str) -> str:
-        try:
-            return f"{float(value):.1f}"
-        except ValueError:
-            return untappd.format_float(value)
-
-    def abv_sort_value(self, entry: dict) -> float:
-        try:
-            return float(untappd.normalize_text(entry.get("beer_abv")))
-        except ValueError:
-            return -1.0
-
-    def entry_created_dt(self, entry: dict) -> datetime | None:
-        created = untappd.normalize_text(entry.get("created_at"))
-        if not created:
-            return None
-        try:
-            return untappd.parse_created_at(created)
-        except Exception:
-            return None
-
-    def entry_search_blob(self, entry: dict) -> str:
-        fields = [
-            untappd.normalize_text(entry.get("created_at")),
-            str(self.checkin_index(entry)),
-            untappd.normalize_text(entry.get("beer_name")),
-            self.abv_table_text(entry),
-            untappd.normalize_text(entry.get("brewery_name")),
-            untappd.normalize_text(entry.get("beer_type")),
-            untappd.display_rating(entry),
-            str(self.had_count(entry)),
-            str(self.had_index(entry)),
-            untappd.normalize_text(entry.get("venue_name")),
-            untappd.normalize_text(entry.get("purchase_venue")),
-            untappd.normalize_text(entry.get("brewery_country")),
-            untappd.normalize_text(entry.get("venue_country")),
-            untappd.normalize_text(entry.get("comment")),
-            untappd.normalize_text(entry.get("flavor_profiles")),
-            untappd.normalize_text(entry.get("serving_type")),
-            untappd.normalize_text(entry.get("tagged_friends")),
-            untappd.normalize_text(entry.get("checkin_id")),
-        ]
-        return "\n".join(field for field in fields if field)
-
     def render_details(self, entry: dict) -> None:
-        ordered_fields = [
-            ("Beer", "beer_name"),
-            ("Brewery", "brewery_name"),
-            ("Type", "beer_type"),
-            ("Check-in", None),
-            ("Total had with this check-in", None),
-            ("Total Had", None),
-            ("Your rating", "rating_score"),
-            ("Global rating", "global_rating_score"),
-            ("Weighted global rating", "global_weighted_rating_score"),
-            ("ABV", "beer_abv"),
-            ("IBU", "beer_ibu"),
-            ("Created at", "created_at"),
-            ("Venue", "venue_name"),
-            ("Venue city", "venue_city"),
-            ("Venue state", "venue_state"),
-            ("Venue country", "venue_country"),
-            ("Purchase venue", "purchase_venue"),
-            ("Serving type", "serving_type"),
-            ("Flavor profiles", "flavor_profiles"),
-            ("Tagged friends", "tagged_friends"),
-            ("Toasts", "total_toasts"),
-            ("Comments", "total_comments"),
-            ("Brewery city", "brewery_city"),
-            ("Brewery state", "brewery_state"),
-            ("Brewery country", "brewery_country"),
-            ("Venue lat", "venue_lat"),
-            ("Venue lng", "venue_lng"),
-            ("Check-in ID", "checkin_id"),
-            ("Beer ID", "bid"),
-            ("Brewery ID", "brewery_id"),
-            ("Check-in URL", "checkin_url"),
-            ("Beer URL", "beer_url"),
-            ("Brewery URL", "brewery_url"),
-            ("Photo URL", "photo_url"),
-        ]
-
-        lines: list[str] = []
-        for label, key in ordered_fields:
-            if key is None:
-                if label == "Check-in":
-                    lines.append(f"{label}: {self.checkin_index(entry)}")
-                elif label == "Total had with this check-in":
-                    lines.append(f"{label}: {self.had_index(entry)}")
-                else:
-                    lines.append(f"{label}: {self.had_count(entry)}")
-                continue
-            value = entry.get(key)
-            if value in (None, ""):
-                continue
-            lines.append(f"{label}: {untappd.format_float(value)}")
-
-        comment = untappd.normalize_text(entry.get("comment"))
-        if comment:
-            lines.extend(["", "Comment:", comment])
-
-        previous_dates = [
-            untappd.normalize_text(candidate.get("created_at"))
-            for candidate in self.entries
-            if self.beer_key(candidate) == self.beer_key(entry)
-        ]
-        if len(previous_dates) > 1:
-            lines.extend(
-                [
-                    "",
-                    "Had dates:",
-                    *sorted(previous_dates, reverse=True),
-                ]
-            )
-
-        self.detail_text.setPlainText("\n".join(lines))
+        self.detail_text.setPlainText(
+            details.checkin_details_text(entry, self.entries, self.had)
+        )
 
     def render_beer_details(self, group: dict) -> None:
-        entries = group["entries"]
-        first = entries[0]
-        lines = [
-            f"Beer: {group['beer']}",
-            f"Brewery: {group['brewery']}",
-            f"Type: {group['beer_type']}",
-            f"ABV: {self.abv_table_text(first)}",
-            f"IBU: {untappd.format_float(first.get('beer_ibu'))}",
-            f"Average rating: {self.mean_rating_text(group['ratings'])}",
-            f"Rated check-ins: {len(group['ratings'])}",
-            f"Total Had: {len(entries)}",
-        ]
-        if group["first_dt"] is not None:
-            lines.append(
-                f"Date First Had: {group['first_dt'].strftime('%Y-%m-%d %H:%M')}"
-            )
-        if group["latest_dt"] is not None:
-            lines.append(
-                f"Date Latest Had: {group['latest_dt'].strftime('%Y-%m-%d %H:%M')}"
-            )
-        for label, key in (
-            ("Global rating", "global_rating_score"),
-            ("Weighted global rating", "global_weighted_rating_score"),
-            ("Brewery city", "brewery_city"),
-            ("Brewery state", "brewery_state"),
-            ("Brewery country", "brewery_country"),
-            ("Beer URL", "beer_url"),
-            ("Brewery URL", "brewery_url"),
-        ):
-            value = first.get(key)
-            if value not in (None, ""):
-                lines.append(f"{label}: {untappd.format_float(value)}")
-
-        venue_counts: dict[str, int] = {}
-        for entry in entries:
-            venue = (
-                untappd.normalize_text(entry.get("venue_name"))
-                or untappd.normalize_text(entry.get("purchase_venue"))
-                or "-"
-            )
-            venue_counts[venue] = venue_counts.get(venue, 0) + 1
-        if venue_counts:
-            top_venues = sorted(
-                venue_counts.items(),
-                key=lambda item: (-item[1], item[0].lower()),
-            )[:5]
-            lines.extend(
-                [
-                    "",
-                    "Top venues:",
-                    *[f"{count}  {venue}" for venue, count in top_venues],
-                ]
-            )
-
-        lines.extend(["", "Check-ins:"])
-        for entry in sorted(
-            entries,
-            key=lambda item: self.entry_created_dt(item) or datetime.min,
-            reverse=True,
-        ):
-            venue = (
-                untappd.normalize_text(entry.get("venue_name"))
-                or untappd.normalize_text(entry.get("purchase_venue"))
-                or "-"
-            )
-            parts = [
-                untappd.normalize_text(entry.get("created_at")) or "-",
-                f"venue={venue}",
-                f"rating={untappd.display_rating(entry)}",
-                f"check-in={self.checkin_index(entry)}",
-                f"had={self.had_index(entry)}",
-            ]
-            serving = untappd.normalize_text(entry.get("serving_type"))
-            if serving:
-                parts.append(f"serving={serving}")
-            toasts = untappd.normalize_text(entry.get("total_toasts"))
-            if toasts:
-                parts.append(f"toasts={toasts}")
-            comment = untappd.normalize_text(entry.get("comment"))
-            if comment:
-                parts.append(f"comment={comment}")
-            lines.append(" | ".join(parts))
-
-        self.beer_detail_text.setPlainText("\n".join(lines))
-
-    def top_counts(
-        self, entries: list[dict], labeler, limit: int = 8
-    ) -> list[tuple[str, int]]:
-        counts: dict[str, int] = {}
-        for entry in entries:
-            label = labeler(entry)
-            counts[label] = counts.get(label, 0) + 1
-        return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[
-            :limit
-        ]
-
-    def checkin_summary_line(self, entry: dict) -> str:
-        venue = (
-            untappd.normalize_text(entry.get("venue_name"))
-            or untappd.normalize_text(entry.get("purchase_venue"))
-            or "-"
-        )
-        parts = [
-            untappd.normalize_text(entry.get("created_at")) or "-",
-            f"beer={untappd.normalize_text(entry.get('beer_name')) or '-'}",
-            f"brewery={untappd.normalize_text(entry.get('brewery_name')) or '-'}",
-            f"venue={venue}",
-            f"rating={untappd.display_rating(entry)}",
-            f"check-in={self.checkin_index(entry)}",
-            f"had={self.had_index(entry)}",
-        ]
-        serving = untappd.normalize_text(entry.get("serving_type"))
-        if serving:
-            parts.append(f"serving={serving}")
-        toasts = untappd.normalize_text(entry.get("total_toasts"))
-        if toasts:
-            parts.append(f"toasts={toasts}")
-        comment = untappd.normalize_text(entry.get("comment"))
-        if comment:
-            parts.append(f"comment={comment}")
-        return " | ".join(parts)
+        self.beer_detail_text.setPlainText(details.beer_details_text(group, self.had))
 
     def render_brewery_details(self, group: dict) -> None:
-        entries = group["entries"]
-        lines = [
-            f"Brewery: {group['brewery']}",
-            f"City: {group['city']}",
-            f"State: {group['state']}",
-            f"Country: {group['country']}",
-            f"Average rating: {self.mean_rating_text(group['ratings'])}",
-            f"Rated check-ins: {len(group['ratings'])}",
-            f"Unique beers: {group['unique_beers']}",
-            f"Total Had: {len(entries)}",
-        ]
-        if group["first_dt"] is not None:
-            lines.append(
-                f"Date First Had: {group['first_dt'].strftime('%Y-%m-%d %H:%M')}"
-            )
-        if group["latest_dt"] is not None:
-            lines.append(
-                f"Date Latest Had: {group['latest_dt'].strftime('%Y-%m-%d %H:%M')}"
-            )
-        first = entries[0]
-        brewery_url = untappd.normalize_text(first.get("brewery_url"))
-        if brewery_url:
-            lines.append(f"Brewery URL: {brewery_url}")
-
-        lines.extend(["", "Top beers:"])
-        lines.extend(
-            f"{count}  {name}"
-            for name, count in self.top_counts(
-                entries,
-                lambda entry: (
-                    untappd.normalize_text(entry.get("beer_name")) or "(unknown)"
-                ),
-            )
-        )
-        lines.extend(["", "Top styles:"])
-        lines.extend(
-            f"{count}  {name}"
-            for name, count in self.top_counts(
-                entries,
-                lambda entry: (
-                    untappd.normalize_text(entry.get("beer_type")) or "(unknown)"
-                ),
-            )
-        )
-        lines.extend(["", "Top venues:"])
-        lines.extend(
-            f"{count}  {name}"
-            for name, count in self.top_counts(
-                entries,
-                lambda entry: (
-                    untappd.normalize_text(entry.get("venue_name"))
-                    or untappd.normalize_text(entry.get("purchase_venue"))
-                    or "-"
-                ),
-            )
-        )
-
-        lines.extend(["", "Check-ins:"])
-        for entry in sorted(
-            entries,
-            key=lambda item: self.entry_created_dt(item) or datetime.min,
-            reverse=True,
-        ):
-            lines.append(self.checkin_summary_line(entry))
-        self.brewery_detail_text.setPlainText("\n".join(lines))
+        self.brewery_detail_text.setPlainText(details.brewery_details_text(group, self.had))
 
     def render_venue_details(self, group: dict) -> None:
-        entries = group["entries"]
-        lines = [
-            f"Venue: {group['venue']}",
-            f"City: {group['city']}",
-            f"State: {group['state']}",
-            f"Country: {group['country']}",
-            f"Average rating: {self.mean_rating_text(group['ratings'])}",
-            f"Rated check-ins: {len(group['ratings'])}",
-            f"Unique beers: {group['unique_beers']}",
-            f"Unique breweries: {group['unique_breweries']}",
-            f"Total Had: {len(entries)}",
-        ]
-        if group["first_dt"] is not None:
-            lines.append(
-                f"Date First Had: {group['first_dt'].strftime('%Y-%m-%d %H:%M')}"
-            )
-        if group["latest_dt"] is not None:
-            lines.append(
-                f"Date Latest Had: {group['latest_dt'].strftime('%Y-%m-%d %H:%M')}"
-            )
-        if group["lat"] and group["lng"]:
-            lines.append(f"Location: {group['lat']}, {group['lng']}")
-
-        lines.extend(["", "Top beers:"])
-        lines.extend(
-            f"{count}  {name}"
-            for name, count in self.top_counts(
-                entries,
-                lambda entry: (
-                    untappd.normalize_text(entry.get("beer_name")) or "(unknown)"
-                ),
-            )
-        )
-        lines.extend(["", "Top breweries:"])
-        lines.extend(
-            f"{count}  {name}"
-            for name, count in self.top_counts(
-                entries,
-                lambda entry: (
-                    untappd.normalize_text(entry.get("brewery_name")) or "(unknown)"
-                ),
-            )
-        )
-        lines.extend(["", "Top styles:"])
-        lines.extend(
-            f"{count}  {name}"
-            for name, count in self.top_counts(
-                entries,
-                lambda entry: (
-                    untappd.normalize_text(entry.get("beer_type")) or "(unknown)"
-                ),
-            )
-        )
-
-        lines.extend(["", "Check-ins:"])
-        for entry in sorted(
-            entries,
-            key=lambda item: self.entry_created_dt(item) or datetime.min,
-            reverse=True,
-        ):
-            lines.append(self.checkin_summary_line(entry))
-        self.venue_detail_text.setPlainText("\n".join(lines))
+        self.venue_detail_text.setPlainText(details.venue_details_text(group, self.had))
 
     def photo_url(self, entry: dict) -> str:
         return untappd.normalize_text(entry.get("photo_url"))
