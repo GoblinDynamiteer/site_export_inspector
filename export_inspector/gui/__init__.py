@@ -16,7 +16,6 @@ from PySide6.QtCore import (
     QIODevice,
     QPoint,
     QModelIndex,
-    QSettings,
     QSortFilterProxyModel,
     QThread,
     Signal,
@@ -25,12 +24,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction,
-    QFont,
-    QFontDatabase,
-    QFontMetrics,
     QImageReader,
     QKeySequence,
-    QPalette,
     QPixmap,
     QStandardItem,
     QStandardItemModel,
@@ -40,13 +35,9 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDateEdit,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -58,9 +49,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSlider,
     QSpinBox,
-    QStackedWidget,
     QTabWidget,
     QTableView,
     QVBoxLayout,
@@ -70,140 +59,27 @@ from PySide6.QtWidgets import (
 from export_inspector import google_mail, messenger_chat, runkeeper, untappd
 from export_inspector.gui.common import (
     DEFAULT_TIMEZONE,
-    app_settings,
     dialog_start_path,
     line_edit,
     remember_text,
     settings_text,
 )
+from export_inspector.gui.appearance import (
+    TEXT_SCALE_DEFAULT,
+    TEXT_SCALE_MAX,
+    TEXT_SCALE_MIN,
+    TEXT_SCALE_STEP,
+    apply_appearance,
+    load_appearance,
+    save_appearance,
+    system_font,
+    use_detail_font,
+)
+from export_inspector.gui.settings_dialog import SettingsDialog
 
 
 def iso_date(date_edit: QDateEdit) -> str:
     return date_edit.date().toString("yyyy-MM-dd")
-
-
-TEXT_SCALE_DEFAULT = 100
-TEXT_SCALE_MIN = 50
-TEXT_SCALE_MAX = 250
-TEXT_SCALE_STEP = 10
-DETAIL_POINT_SIZE_MAX = 72
-DETAIL_PANE_PROPERTY = "exportInspectorDetailPane"
-_system_font: QFont | None = None
-
-
-@dataclass(frozen=True)
-class AppearanceSettings:
-    """GUI text settings, persisted in QSettings under ``appearance/``.
-
-    ``text_scale`` is a percentage of the system default font size. ``detail_family``
-    is the monospace font for detail panes ("" means the system monospace font), and
-    ``detail_point_size`` its size in points (0 follows the interface text size).
-    """
-
-    text_scale: int = TEXT_SCALE_DEFAULT
-    detail_family: str = ""
-    detail_point_size: int = 0
-
-
-def _settings_int(settings: QSettings, key: str, default: int, low: int, high: int) -> int:
-    try:
-        value = int(settings.value(key, default))
-    except (TypeError, ValueError):
-        return default
-    return max(low, min(high, value))
-
-
-def load_appearance() -> AppearanceSettings:
-    """Read the saved appearance settings, falling back to defaults for bad values."""
-    settings = app_settings()
-    return AppearanceSettings(
-        text_scale=_settings_int(
-            settings, "appearance/text_scale", TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
-        ),
-        detail_family=str(settings.value("appearance/detail_family", "") or ""),
-        detail_point_size=_settings_int(
-            settings, "appearance/detail_point_size", 0, 0, DETAIL_POINT_SIZE_MAX
-        ),
-    )
-
-
-def save_appearance(appearance: AppearanceSettings) -> None:
-    """Persist appearance settings. Does not apply them; see ``apply_appearance``."""
-    settings = app_settings()
-    settings.setValue("appearance/text_scale", appearance.text_scale)
-    settings.setValue("appearance/detail_family", appearance.detail_family)
-    settings.setValue("appearance/detail_point_size", appearance.detail_point_size)
-
-
-def system_font() -> QFont:
-    """Return the application font as it was before any text scaling was applied."""
-    global _system_font
-    if _system_font is None:
-        _system_font = QFont(QApplication.font())
-    return QFont(_system_font)
-
-
-def interface_font(appearance: AppearanceSettings) -> QFont:
-    """Return the system font scaled by ``appearance.text_scale``."""
-    font = system_font()
-    factor = appearance.text_scale / 100
-    if font.pointSizeF() > 0:
-        font.setPointSizeF(font.pointSizeF() * factor)
-    else:
-        font.setPixelSize(max(1, round(font.pixelSize() * factor)))
-    return font
-
-
-def detail_font(appearance: AppearanceSettings) -> QFont:
-    """Return the monospace font for detail panes."""
-    font = QFont(appearance.detail_family or "Monospace")
-    font.setStyleHint(QFont.Monospace)
-    if appearance.detail_point_size:
-        font.setPointSize(appearance.detail_point_size)
-        return font
-    interface = interface_font(appearance)
-    if interface.pointSizeF() > 0:
-        font.setPointSizeF(interface.pointSizeF())
-    else:
-        font.setPixelSize(interface.pixelSize())
-    return font
-
-
-def monospace_families() -> list[str]:
-    """Return the selectable fixed-pitch font families, sorted by name.
-
-    Private system families are excluded, as Qt requires for font-selection controls.
-    """
-    return sorted(
-        family
-        for family in QFontDatabase.families()
-        if QFontDatabase.isFixedPitch(family) and not QFontDatabase.isPrivateFamily(family)
-    )
-
-
-def use_detail_font(widget: QWidget) -> None:
-    """Give a detail pane the detail font and keep it in sync with later changes."""
-    widget.setProperty(DETAIL_PANE_PROPERTY, True)
-    widget.setFont(detail_font(load_appearance()))
-
-
-def apply_appearance(appearance: AppearanceSettings) -> None:
-    """Apply appearance settings to the running application without saving them.
-
-    Sets the application font, refreshes every detail pane registered with
-    ``use_detail_font`` and grows table rows so the scaled text fits.
-    """
-    font = interface_font(appearance)
-    QApplication.setFont(font)
-    mono = detail_font(appearance)
-    row_height = QFontMetrics(font).height() + 10
-    for widget in QApplication.allWidgets():
-        if widget.property(DETAIL_PANE_PROPERTY):
-            widget.setFont(mono)
-        elif isinstance(widget, QTableView):
-            header = widget.verticalHeader()
-            header.resetDefaultSectionSize()
-            header.setDefaultSectionSize(max(header.defaultSectionSize(), row_height))
 
 
 def create_date_controls() -> tuple[QCheckBox, QDateEdit]:
@@ -2980,150 +2856,6 @@ class RunkeeperTab(QWidget):
             self.map_layout.addWidget(self.map_view)
 
         self.map_view.setHtml(map_html, QUrl("https://carto.com/"))
-
-
-class SettingsDialog(QDialog):
-    """Settings window: a category list on the left and one page per category.
-
-    Changes are previewed in the dialog and only saved and applied on Apply or OK.
-    """
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Settings — Export Inspector")
-
-        self.categories = QListWidget()
-        self.pages = QStackedWidget()
-        self.categories.currentRowChanged.connect(self.pages.setCurrentIndex)
-
-        self.scale_slider = QSlider(Qt.Horizontal)
-        self.scale_slider.setRange(TEXT_SCALE_MIN, TEXT_SCALE_MAX)
-        self.scale_slider.setSingleStep(5)
-        self.scale_slider.setPageStep(TEXT_SCALE_STEP)
-        self.scale_value = QLabel()
-        scale_row = QHBoxLayout()
-        scale_row.addWidget(self.scale_slider, 1)
-        scale_row.addWidget(self.scale_value)
-        appearance_form = QFormLayout()
-        appearance_form.addRow("Text size", scale_row)
-        scale_hint = QLabel(
-            "Relative to the system font. Shortcuts: Ctrl++ larger, Ctrl+- smaller, Ctrl+0 reset."
-        )
-        scale_hint.setWordWrap(True)
-        self.add_page("Appearance", appearance_form, scale_hint)
-
-        self.detail_family = QComboBox()
-        self.detail_family.addItem("System monospace", "")
-        for family in monospace_families():
-            self.detail_family.addItem(family, family)
-        self.detail_size = QSpinBox()
-        self.detail_size.setRange(0, DETAIL_POINT_SIZE_MAX)
-        self.detail_size.setSpecialValueText("Same as interface")
-        self.detail_size.setSuffix(" pt")
-        detail_form = QFormLayout()
-        detail_form.addRow("Family", self.detail_family)
-        detail_form.addRow("Size", self.detail_size)
-        self.add_page("Detail panes", detail_form)
-
-        self.preview_text = QLabel("Example Pale Ale · Sample Brewery · 3.75")
-        self.preview_mono = QLabel("2026-10-10 18:42  check-in #128")
-        preview = QFrame()
-        preview.setFrameShape(QFrame.StyledPanel)
-        preview.setAutoFillBackground(True)
-        preview.setBackgroundRole(QPalette.Base)
-        preview_layout = QVBoxLayout(preview)
-        preview_layout.addWidget(self.preview_text)
-        preview_layout.addWidget(self.preview_mono)
-        preview_layout.addStretch(1)
-
-        right = QVBoxLayout()
-        right.addWidget(self.pages)
-        right.addWidget(QLabel("Preview"))
-        right.addWidget(preview, 1)
-        body = QHBoxLayout()
-        body.addWidget(self.categories)
-        body.addLayout(right, 1)
-
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.RestoreDefaults
-            | QDialogButtonBox.Cancel
-            | QDialogButtonBox.Apply
-            | QDialogButtonBox.Ok
-        )
-        self.buttons.button(QDialogButtonBox.RestoreDefaults).clicked.connect(
-            self.restore_defaults
-        )
-        self.buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply)
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-
-        root = QVBoxLayout(self)
-        root.addLayout(body, 1)
-        root.addWidget(self.buttons)
-
-        self.set_controls(load_appearance())
-        self.scale_slider.valueChanged.connect(self.update_preview)
-        self.detail_family.currentIndexChanged.connect(self.update_preview)
-        self.detail_size.valueChanged.connect(self.update_preview)
-        self.update_preview()
-        self.categories.setCurrentRow(0)
-        self.categories.setFixedWidth(self.categories.sizeHintForColumn(0) + 32)
-        metrics = QFontMetrics(self.font())
-        self.resize(
-            max(self.sizeHint().width(), metrics.horizontalAdvance("M") * 40),
-            max(self.sizeHint().height(), metrics.height() * 18),
-        )
-
-    def add_page(self, title: str, *contents) -> None:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 0, 0, 0)
-        heading = QLabel(title)
-        heading_font = QFont()
-        heading_font.setBold(True)
-        heading.setFont(heading_font)
-        layout.addWidget(heading)
-        for item in contents:
-            if isinstance(item, QWidget):
-                layout.addWidget(item)
-            else:
-                layout.addLayout(item)
-        layout.addStretch(1)
-        self.categories.addItem(title)
-        self.pages.addWidget(page)
-
-    def set_controls(self, appearance: AppearanceSettings) -> None:
-        self.scale_slider.setValue(appearance.text_scale)
-        index = self.detail_family.findData(appearance.detail_family)
-        self.detail_family.setCurrentIndex(max(index, 0))
-        self.detail_size.setValue(appearance.detail_point_size)
-
-    def pending(self) -> AppearanceSettings:
-        """Return the settings as currently chosen in the dialog."""
-        return AppearanceSettings(
-            text_scale=self.scale_slider.value(),
-            detail_family=str(self.detail_family.currentData() or ""),
-            detail_point_size=self.detail_size.value(),
-        )
-
-    def update_preview(self) -> None:
-        appearance = self.pending()
-        self.scale_value.setText(f"{appearance.text_scale} %")
-        self.preview_text.setFont(interface_font(appearance))
-        self.preview_mono.setFont(detail_font(appearance))
-
-    def restore_defaults(self) -> None:
-        self.set_controls(AppearanceSettings())
-
-    def apply(self) -> None:
-        appearance = self.pending()
-        save_appearance(appearance)
-        apply_appearance(appearance)
-        self.update_preview()
-
-    def accept(self) -> None:
-        self.apply()
-        super().accept()
 
 
 class MainWindow(QMainWindow):
