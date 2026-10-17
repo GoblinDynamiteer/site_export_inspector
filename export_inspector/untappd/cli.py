@@ -1,10 +1,8 @@
-#!/usr/bin/env python3
+"""The `untappd-export` command: info, search and show over an Untappd JSON export."""
 
 from __future__ import annotations
 
 import argparse
-import json
-import math
 import re
 import sys
 from collections import Counter
@@ -12,12 +10,23 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+
+from export_inspector.untappd.checkins import (
+    DATE_FORMAT,
+    display_rating,
+    entry_search_fields,
+    format_float,
+    load_export,
+    normalize_text,
+    parse_created_at,
+    parse_date_filter,
+    parse_rating,
+    shorten,
+)
 
 
 ANSI_RESET = "\033[0m"
 ANSI_HIGHLIGHT = "\033[1;30;43m"
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 @dataclass
@@ -94,53 +103,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_export(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        raise SystemExit(f"File not found: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise SystemExit("Expected the Untappd export to be a JSON array.")
-    return data
-
-
-def parse_created_at(value: str) -> datetime:
-    return datetime.strptime(value, DATE_FORMAT).replace(tzinfo=ZoneInfo("Europe/Stockholm"))
-
-
-def parse_date_filter(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=ZoneInfo("Europe/Stockholm"))
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"Invalid date '{value}'. Expected format: YYYY-MM-DD."
-        ) from exc
-
-
-def normalize_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def parse_rating(entry: dict[str, Any]) -> float | None:
-    value = entry.get("rating_score")
-    if value in ("", None):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def display_rating(entry: dict[str, Any]) -> str:
-    rating = parse_rating(entry)
-    if rating is None:
-        return "-"
-    return f"{rating:.2f}".rstrip("0").rstrip(".")
-
-
 def use_ansi(args: argparse.Namespace) -> bool:
     return sys.stdout.isatty() and not getattr(args, "no_ansi", False)
 
@@ -179,29 +141,6 @@ def highlight_text(text: str, terms: list[str], ansi_enabled: bool) -> str:
         cursor = end
     parts.append(text[cursor:])
     return "".join(parts)
-
-
-def shorten(text: str, limit: int = 220) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 3] + "..."
-
-
-def entry_search_fields(entry: dict[str, Any]) -> list[tuple[str, str]]:
-    return [
-        ("Beer", normalize_text(entry.get("beer_name"))),
-        ("Brewery", normalize_text(entry.get("brewery_name"))),
-        ("Type", normalize_text(entry.get("beer_type"))),
-        ("Comment", normalize_text(entry.get("comment"))),
-        ("Venue", normalize_text(entry.get("venue_name"))),
-        ("Purchase venue", normalize_text(entry.get("purchase_venue"))),
-        ("Flavor", normalize_text(entry.get("flavor_profiles"))),
-        ("Serving", normalize_text(entry.get("serving_type"))),
-        ("Brewery country", normalize_text(entry.get("brewery_country"))),
-        ("Venue country", normalize_text(entry.get("venue_country"))),
-        ("Tagged friends", normalize_text(entry.get("tagged_friends"))),
-    ]
 
 
 def entry_matches(entry: dict[str, Any], args: argparse.Namespace) -> tuple[bool, str]:
@@ -749,16 +688,6 @@ def handle_search(args: argparse.Namespace) -> None:
         print()
 
 
-def format_float(value: Any) -> str:
-    if value is None or value == "":
-        return "-"
-    if isinstance(value, float):
-        if math.isfinite(value):
-            return f"{value:.4f}".rstrip("0").rstrip(".")
-        return "-"
-    return str(value)
-
-
 def handle_show(args: argparse.Namespace) -> None:
     data = load_export(Path(args.input_file))
     identifier = args.identifier.strip()
@@ -824,6 +753,7 @@ def handle_show(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Entry point of the `untappd-export` script: run the info, search or show command."""
     args = parse_args()
     if args.command == "info":
         handle_info(args)
