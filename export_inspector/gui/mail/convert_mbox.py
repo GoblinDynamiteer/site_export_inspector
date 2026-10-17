@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from export_inspector import google_mail
+from export_inspector.gmail import sqlite_index
 from export_inspector.gui.common import (
     dialog_start_path,
     line_edit,
@@ -60,16 +60,16 @@ class MboxConversionThread(QThread):
 
     def run(self) -> None:
         try:
-            conn = google_mail.open_database(self.index_path, force=self.overwrite)
+            conn = sqlite_index.open_database(self.index_path, force=self.overwrite)
             try:
-                message_count, stats = google_mail.index_mbox(
+                message_count, stats = sqlite_index.index_mbox(
                     self.mbox_path,
                     conn,
                     max_body_chars=self.max_body_chars,
                     show_progress=False,
                     progress_callback=self.update_progress,
                 )
-                google_mail.write_index_metadata(
+                sqlite_index.write_index_metadata(
                     conn,
                     self.mbox_path,
                     message_count,

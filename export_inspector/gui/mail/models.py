@@ -1,8 +1,6 @@
-"""Gmail table record and filter/sort proxy for the Google Mail tab."""
+"""Gmail item roles and the mail table's filter/sort proxy (records: `gmail.records`)."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Qt
 
@@ -10,27 +8,6 @@ from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Qt
 GMAIL_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 21
 GMAIL_RECORD_ROLE = int(Qt.ItemDataRole.UserRole) + 22
 GMAIL_SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 23
-
-
-@dataclass
-class GmailRecord:
-    """One row of the mail table: display fields plus where to load the full message.
-
-    `source_offset` is the byte offset of the message's `From ` line in `source_path`,
-    or None when the message must be found by `message_index` instead.
-    """
-
-    message_index: int
-    source_path: str
-    source_offset: int | None
-    date_text: str
-    date_sort: int
-    sender: str
-    recipients: str
-    subject: str
-    labels: str
-    thread_id: str
-    snippet: str
 
 
 class GmailFilterProxy(QSortFilterProxyModel):
