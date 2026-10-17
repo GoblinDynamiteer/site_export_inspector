@@ -18,8 +18,9 @@ import pytest
 from PySide6.QtCore import QElapsedTimer
 from PySide6.QtWidgets import QApplication, QFileDialog, QTabWidget, QWidget
 
-from export_inspector import google_mail, gui
+from export_inspector import google_mail
 from export_inspector.gui import common
+from export_inspector.gui.main_window import MainWindow
 from tests.gui_snapshot import FIXTURES, Snapshot, each_row_detail
 
 TAB_TITLES = ["Messenger", "Google Mail", "Untappd", "Runkeeper"]
@@ -40,7 +41,7 @@ SECOND_GPX = """<?xml version="1.0" encoding="UTF-8"?>
 
 @pytest.fixture
 def window(qt_app, message_boxes):
-    main_window = gui.MainWindow()
+    main_window = MainWindow()
     yield main_window
     main_window.close()
     main_window.deleteLater()
