@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from export_inspector import runkeeper
+from export_inspector.runkeeper import details
+from export_inspector.runkeeper.ranks import ActivityRanks
 from export_inspector.gui.appearance import use_detail_font
 from export_inspector.gui.common import (
     DEFAULT_TIMEZONE,
@@ -40,15 +42,6 @@ from export_inspector.gui.runkeeper.models import (
     RunkeeperActivityFilterProxy,
 )
 
-def ordinal(value: int) -> str:
-    """Return `value` with its English ordinal suffix, e.g. 1st, 12th, 23rd."""
-    if 10 <= value % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
-    return f"{value}{suffix}"
-
-
 class RunkeeperTab(QWidget):
     """Tab that loads Runkeeper ZIP exports (a ZIP or a folder of them), lists the
     activities with ranks and details, and shows the selected route on a map."""
@@ -61,8 +54,7 @@ class RunkeeperTab(QWidget):
         self.route_points_cache: dict[
             tuple[str, str], list[dict[str, float | str | None]]
         ] = {}
-        self.distance_ranks: dict[int, int] = {}
-        self.duration_ranks: dict[int, int] = {}
+        self.ranks = ActivityRanks()
         self.selected_activity: runkeeper.Activity | None = None
 
         self.path_edit = line_edit("Runkeeper ZIP export or folder of ZIPs")
@@ -186,7 +178,7 @@ class RunkeeperTab(QWidget):
         self.route_points_cache.clear()
         if self.map_view is not None:
             self.map_view.setHtml("<html><body></body></html>")
-        self.rebuild_ranks()
+        self.ranks = ActivityRanks.from_activities(self.activities)
         self.populate_table()
         self.apply_filter()
 
@@ -198,31 +190,6 @@ class RunkeeperTab(QWidget):
             self.show_map_button.setEnabled(False)
             if self.map_view is not None:
                 self.map_view.setHtml("<html><body></body></html>")
-
-    def rebuild_ranks(self) -> None:
-        self.distance_ranks = self.rank_by_type("distance")
-        self.duration_ranks = self.rank_by_type("duration")
-
-    def rank_by_type(self, metric: str) -> dict[int, int]:
-        ranks: dict[int, int] = {}
-        by_type: dict[str, list[runkeeper.Activity]] = {}
-        for activity in self.activities:
-            by_type.setdefault(activity.activity_type, []).append(activity)
-
-        for activities in by_type.values():
-            if metric == "distance":
-                values = [activity.distance_km for activity in activities]
-                for activity in activities:
-                    ranks[activity.index] = 1 + sum(
-                        value > activity.distance_km for value in values
-                    )
-            else:
-                values = [activity.duration_seconds for activity in activities]
-                for activity in activities:
-                    ranks[activity.index] = 1 + sum(
-                        value > activity.duration_seconds for value in values
-                    )
-        return ranks
 
     def populate_table(self) -> None:
         self.model.removeRows(0, self.model.rowCount())
@@ -244,7 +211,7 @@ class RunkeeperTab(QWidget):
                 activity.duration_seconds,
                 activity.distance_km,
             ]
-            search_blob = self.activity_search_blob(activity)
+            search_blob = details.activity_search_blob(activity, self.ranks, timezone)
             for column, item in enumerate(row):
                 item.setEditable(False)
                 item.setData(activity, RUNKEEPER_ACTIVITY_ROLE)
@@ -285,72 +252,11 @@ class RunkeeperTab(QWidget):
         if self.map_view is not None:
             self.map_view.setHtml("<html><body></body></html>")
 
-    def activity_search_blob(self, activity: runkeeper.Activity) -> str:
-        timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
-        fields = [
-            activity.name,
-            activity.file_name,
-            activity.activity_type,
-            runkeeper.format_dt(activity.started_at, timezone),
-            runkeeper.format_dt(activity.finished_at, timezone),
-            runkeeper.format_duration(activity.duration_seconds),
-            f"{activity.distance_km:.2f} km",
-            runkeeper.format_pace(activity.distance_km, activity.duration_seconds),
-            runkeeper.format_speed(activity.distance_km, activity.duration_seconds),
-            f"{activity.elevation_gain_m:.0f} m",
-            str(activity.point_count),
-            str(activity.archive_path),
-            self.distance_rank_label(activity),
-            self.duration_rank_label(activity),
-        ]
-        if activity.start_lat is not None and activity.start_lon is not None:
-            fields.append(f"{activity.start_lat:.6f}, {activity.start_lon:.6f}")
-        if activity.end_lat is not None and activity.end_lon is not None:
-            fields.append(f"{activity.end_lat:.6f}, {activity.end_lon:.6f}")
-        return "\n".join(fields)
-
     def render_details(self, activity: runkeeper.Activity) -> None:
         timezone = self.timezone_edit.text().strip() or DEFAULT_TIMEZONE
-        lines = [
-            f"Name: {activity.name}",
-            f"File: {activity.file_name}",
-            f"Type: {activity.activity_type}",
-            f"Started: {runkeeper.format_dt(activity.started_at, timezone)}",
-            f"Finished: {runkeeper.format_dt(activity.finished_at, timezone)}",
-            f"Duration: {runkeeper.format_duration(activity.duration_seconds)} ({self.duration_rank_label(activity)})",
-            f"Distance: {activity.distance_km:.2f} km ({self.distance_rank_label(activity)})",
-            f"Pace: {runkeeper.format_pace(activity.distance_km, activity.duration_seconds)}",
-            f"Speed: {runkeeper.format_speed(activity.distance_km, activity.duration_seconds)}",
-            f"Elevation gain: {activity.elevation_gain_m:.0f} m",
-            f"Track points: {activity.point_count}",
-        ]
-        if activity.start_lat is not None and activity.start_lon is not None:
-            lines.append(f"Start: {activity.start_lat:.6f}, {activity.start_lon:.6f}")
-        if activity.end_lat is not None and activity.end_lon is not None:
-            lines.append(f"End: {activity.end_lat:.6f}, {activity.end_lon:.6f}")
-        lines.extend(
-            [
-                f"Archive: {activity.archive_path}",
-                f"Photo entries in loaded export data: {len(self.photos)}",
-            ]
+        self.detail_text.setPlainText(
+            details.activity_details_text(activity, self.ranks, timezone, len(self.photos))
         )
-        if self.photos:
-            lines.append(
-                "Photo note: photos.csv uses activity UUIDs that are not exposed in the GPX file names."
-            )
-        self.detail_text.setPlainText("\n".join(lines))
-
-    def distance_rank_label(self, activity: runkeeper.Activity) -> str:
-        rank = self.distance_ranks.get(activity.index)
-        if rank is None:
-            return f"unranked {activity.activity_type} distance"
-        return f"{ordinal(rank)} longest {activity.activity_type} distance"
-
-    def duration_rank_label(self, activity: runkeeper.Activity) -> str:
-        rank = self.duration_ranks.get(activity.index)
-        if rank is None:
-            return f"unranked {activity.activity_type} duration"
-        return f"{ordinal(rank)} longest {activity.activity_type} duration"
 
     def show_map(self) -> None:
         """Render the selected activity's route in the embedded map.

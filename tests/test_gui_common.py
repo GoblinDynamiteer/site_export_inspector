@@ -5,12 +5,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
 from PySide6.QtCore import QDate
 
 from export_inspector.gui import common
 from export_inspector.gui.messenger import tab as messenger_tab
-from export_inspector.gui.runkeeper import tab as runkeeper_tab
 
 
 def test_settings_constants_and_location(qt_app, tmp_path) -> None:
@@ -79,18 +77,6 @@ def test_date_controls_toggle_and_format(qt_app) -> None:
     assert messenger_tab.iso_date(date_edit) == "2022-03-04"
     checkbox.setChecked(False)
     assert not date_edit.isEnabled()
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"), (10, "10th"),
-        (11, "11th"), (12, "12th"), (13, "13th"), (20, "20th"), (21, "21st"),
-        (22, "22nd"), (23, "23rd"), (101, "101st"), (111, "111th"), (112, "112th"),
-    ],
-)
-def test_ordinal(value: int, expected: str) -> None:
-    assert runkeeper_tab.ordinal(value) == expected
 
 
 def test_common_does_not_import_other_gui_modules() -> None:
