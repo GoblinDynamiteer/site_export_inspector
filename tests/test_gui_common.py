@@ -10,6 +10,7 @@ from PySide6.QtCore import QDate
 
 from export_inspector import gui
 from export_inspector.gui import common
+from export_inspector.gui.messenger import tab as messenger_tab
 
 
 def test_settings_constants_and_location(qt_app, tmp_path) -> None:
@@ -66,7 +67,7 @@ def test_dialog_start_path(qt_app, tmp_path) -> None:
 
 
 def test_date_controls_toggle_and_format(qt_app) -> None:
-    checkbox, date_edit = gui.create_date_controls()
+    checkbox, date_edit = messenger_tab.create_date_controls()
     assert checkbox.text() == "Enable"
     assert not checkbox.isChecked()
     assert not date_edit.isEnabled()
@@ -75,7 +76,7 @@ def test_date_controls_toggle_and_format(qt_app) -> None:
     checkbox.setChecked(True)
     assert date_edit.isEnabled()
     date_edit.setDate(QDate(2022, 3, 4))
-    assert gui.iso_date(date_edit) == "2022-03-04"
+    assert messenger_tab.iso_date(date_edit) == "2022-03-04"
     checkbox.setChecked(False)
     assert not date_edit.isEnabled()
 
